@@ -240,10 +240,13 @@ export default function CreatePostModal({
                   </span>
                   <input
                     id="monthlyRent"
-                    type="number"
-                    min={0}
+                    type="text"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
                     value={form.monthlyRent}
-                    onChange={(e) => onChange({ monthlyRent: e.target.value })}
+                    onChange={(e) =>
+                      onChange({ monthlyRent: e.target.value.replace(/[^0-9]/g, "") })
+                    }
                     placeholder="18000"
                     className={`${inputClasses} bg-white pl-7`}
                   />
