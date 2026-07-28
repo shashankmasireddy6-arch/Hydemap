@@ -10,17 +10,15 @@ import CreatePostModal from "@/components/CreatePostModal";
 import PickLocationBanner from "@/components/PickLocationBanner";
 import SelectedLocationBadge from "@/components/SelectedLocationBadge";
 import RentInsightsCard from "@/components/RentInsightsCard";
-import MatchesPanel from "@/components/MatchesPanel";
 import { LatLng, PostType, Property } from "@/types/post";
 import { filterProperties } from "@/lib/filterProperties";
 import { calculateAverageRent, calculateRentPaidRange } from "@/lib/rentInsights";
-import { findMatchingRentPosts, MatchResult, PropertyMatch } from "@/lib/matching";
 import {
   buildPropertyFromForm,
   CreatePostFormState,
   DEFAULT_CREATE_POST_FORM,
 } from "@/lib/createPostForm";
-import { fetchPosts, addPost } from "@/lib/postsService";
+import { fetchPosts, addPost, uploadPostPhotos } from "@/lib/postsService";
 import { isFirebaseConfigured } from "@/lib/firebase";
 import demoPropertiesData from "@/data/properties.json";
 
@@ -55,13 +53,6 @@ export default function HomePage() {
   // A location the user has tapped on the map but not yet submitted as a
   // post. Drives the pulsing temp marker and pre-fills the form.
   const [selectedLocation, setSelectedLocation] = useState<LatLng | null>(null);
-
-  // Set right after creating a "Requirement" post (or clicking "Find
-  // matches" on an existing one) — drives the matches panel.
-  const [matchResult, setMatchResult] = useState<MatchResult | null>(null);
-  // A new object (even for the same id) flies the map to that marker and
-  // opens its popup — see MapView's focusRequest prop.
-  const [focusRequest, setFocusRequest] = useState<{ id: string } | null>(null);
 
   // Fetch posts from Firestore once on load.
   useEffect(() => {
@@ -173,20 +164,6 @@ export default function HomePage() {
 
   const handleClearSelectedLocation = () => setSelectedLocation(null);
 
-  // "Find matches" button inside an existing Requirement post's popup.
-  const handleFindMatches = useCallback(
-    (requirement: Property) => {
-      setMatchResult(findMatchingRentPosts(requirement, posts));
-    },
-    [posts]
-  );
-
-  const handleSelectMatch = (match: PropertyMatch) => {
-    setFocusRequest({ id: match.id });
-  };
-
-  const handleCloseMatches = () => setMatchResult(null);
-
   const handleCloseModal = () => {
     if (isSubmitting) return;
     setIsModalOpen(false);
@@ -208,15 +185,26 @@ export default function HomePage() {
     try {
       let newPost: Property;
 
+      // Photos are uploaded to Firebase Storage up front so their URLs can
+      // ride along with the initial Firestore write, rather than creating
+      // the post and then patching it in a second round trip.
+      let photoUrls: string[] = [];
+      if (form.photos.length > 0) {
+        photoUrls = isFirebaseConfigured
+          ? await uploadPostPhotos(form.photos)
+          : form.photos.map((file) => URL.createObjectURL(file));
+      }
+      const dataWithPhotos = photoUrls.length > 0 ? { ...data, photoUrls } : data;
+
       if (usingDemoData) {
         // Firestore isn't configured — keep the demo interactive by
         // storing the new post locally instead. `email` is dropped here
         // too, for consistency with addPost() never returning it.
-        const { email, ...publicData } = data;
+        const { email, ...publicData } = dataWithPhotos;
         newPost = { id: `local-${Date.now()}`, ...publicData };
       } else {
         // Add new post to Firestore; Firestore assigns the document id.
-        newPost = await addPost(data);
+        newPost = await addPost(dataWithPhotos);
       }
 
       // Add to local state so the marker shows up immediately — no need
@@ -226,13 +214,6 @@ export default function HomePage() {
       setForm(DEFAULT_CREATE_POST_FORM);
       // The pin is now a real post marker, so drop the temporary one.
       setSelectedLocation(null);
-
-      // "Looking for property" post: immediately surface nearby, in-budget
-      // Rent posts. Uses posts + the just-created post directly, since the
-      // setPosts update above hasn't landed yet at this point.
-      if (newPost.type === "Requirement") {
-        setMatchResult(findMatchingRentPosts(newPost, [...posts, newPost]));
-      }
     } catch (err) {
       console.error("Failed to add post to Firestore:", err);
       setFormError("Couldn't save the post. Please try again.");
@@ -250,8 +231,6 @@ export default function HomePage() {
         onMapClick={handleMapClick}
         isPickingLocation={isPickingLocation}
         pendingLocation={selectedLocation}
-        onFindMatches={handleFindMatches}
-        focusRequest={focusRequest}
       />
 
       {/* Top area: results count, filter bar / picking banner, insights, location badge */}
@@ -291,18 +270,6 @@ export default function HomePage() {
           </>
         )}
       </div>
-
-      {/* Matches panel: appears after posting/opening a Requirement post */}
-      {matchResult && (
-        <div className="pointer-events-none absolute right-3 top-20 sm:right-6 sm:top-24">
-          <MatchesPanel
-            requirement={matchResult.requirement}
-            matches={matchResult.matches}
-            onClose={handleCloseMatches}
-            onSelectMatch={handleSelectMatch}
-          />
-        </div>
-      )}
 
       {/* Legend, bottom right */}
       <div className="pointer-events-none absolute bottom-4 right-4 sm:bottom-6 sm:right-6">

@@ -166,8 +166,6 @@ export function PostTypeIcon({ type, className }: { type: PostType; className?: 
       return <TagIcon className={className} />;
     case "Sharing":
       return <UsersIcon className={className} />;
-    case "Requirement":
-      return <SearchIcon className={className} />;
     case "Rent Paid":
       return <CheckBadgeIcon className={className} />;
   }
@@ -182,6 +180,5 @@ export const POST_TYPE_ICON_MARKUP: Record<PostType, string> = {
   Rent: `<path d="M3 11.5 12 4l9 7.5" /><path d="M5 10v9a1 1 0 0 0 1 1h3v-6h6v6h3a1 1 0 0 0 1-1v-9" />`,
   Sale: `<path d="M12 2h7a1 1 0 0 1 1 1v7l-9.3 9.3a1 1 0 0 1-1.4 0l-6.6-6.6a1 1 0 0 1 0-1.4L12 2Z" /><circle cx="15.5" cy="8.5" r="1.4" />`,
   Sharing: `<circle cx="8.5" cy="8" r="3" /><circle cx="16.2" cy="9.2" r="2.3" /><path d="M2.5 20c0-3.3 2.7-6 6-6s6 2.7 6 6" /><path d="M14.7 14.3c2.5 0.2 4.6 2.2 4.8 5.7" />`,
-  Requirement: `<circle cx="11" cy="11" r="6.5" /><path d="M20 20l-4.3-4.3" />`,
   "Rent Paid": `<circle cx="12" cy="12" r="9" /><path d="M8.3 12.5l2.5 2.5 5-5" />`,
 };

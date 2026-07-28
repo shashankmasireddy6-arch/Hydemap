@@ -7,7 +7,8 @@ import {
   Timestamp,
   DocumentData,
 } from "firebase/firestore";
-import { db } from "@/lib/firebase";
+import { getDownloadURL, ref as storageRef, uploadBytes } from "firebase/storage";
+import { db, storage } from "@/lib/firebase";
 import { NewProperty, Property } from "@/types/post";
 
 // Every post lives in this single top-level collection.
@@ -35,6 +36,7 @@ function toProperty(id: string, data: DocumentData): Property {
     parking: data.parking,
     squareFootage: data.squareFootage,
     description: data.description,
+    photoUrls: data.photoUrls,
     // `email` is intentionally never read here — it's write-only, so it
     // never reaches other users through the app.
   };
@@ -74,4 +76,20 @@ export async function addPost(data: NewProperty): Promise<Property> {
 
   const docRef = await addDoc(collection(db, POSTS_COLLECTION), payload);
   return { id: docRef.id, ...publicData };
+}
+
+/**
+ * Uploads post photos to Firebase Storage and returns their download URLs,
+ * so they can ride along with the initial addPost() write. Grouped under a
+ * random folder per call (rather than a Firestore doc id, which doesn't
+ * exist yet at this point) purely to avoid filename collisions.
+ */
+export async function uploadPostPhotos(photos: File[]): Promise<string[]> {
+  const folder = crypto.randomUUID();
+  const uploads = photos.map(async (file, index) => {
+    const fileRef = storageRef(storage, `posts/${folder}/${index}-${file.name}`);
+    await uploadBytes(fileRef, file);
+    return getDownloadURL(fileRef);
+  });
+  return Promise.all(uploads);
 }

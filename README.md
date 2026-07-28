@@ -1,7 +1,7 @@
 # Hyderabad Property Map
 
 A full-screen Google Maps–based UI for browsing property posts (Rent, Sale,
-Sharing, Requirement, Rent Paid) around Hyderabad, India.
+Sharing, Rent Paid) around Hyderabad, India.
 
 ## Setup
 
@@ -65,6 +65,21 @@ reason), the app automatically falls back to the bundled demo data and
 shows a small "Showing demo data" notice — new posts you create in that
 mode are only kept in memory for the session, not saved anywhere.
 
+### Firebase Storage setup (post photos)
+
+Photos attached to a post are uploaded to Firebase Storage — a separate
+product from Firestore, so it needs its own setup step:
+
+1. In the same Firebase project, open **Build > Storage** and click **Get
+   started** (test mode while developing, same as Firestore).
+2. `NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET` in `.env.local` (see
+   `.env.local.example`) already points `lib/firebase.ts` at it — no extra
+   config needed once Storage is enabled.
+
+If Storage isn't enabled, uploads will fail; the Create Post form will show
+an error rather than silently dropping the photos. Free tier is 5GB stored /
+1GB downloaded per day, which comfortably covers small/personal use.
+
 ## Run
 
 ```bash
@@ -93,17 +108,14 @@ components/
   PickLocationBanner.tsx    "Tap the map to set the pin" banner shown while re-picking
   SelectedLocationBadge.tsx "📍 lat, lng · Add post here · ✕" shortcut shown after a map click
   RentInsightsCard.tsx      Small floating card: average rent + rent-paid range for visible markers
-  MatchesPanel.tsx          "N matching properties found" panel for Requirement ("Looking for
-                             property") posts, listing nearby in-budget Rent matches
 lib/
-  firebase.ts          Firebase v9 modular SDK setup — initializes the app once, exports `db`
-  postsService.ts      Firestore reads/writes for posts: fetchPosts(), addPost()
+  firebase.ts          Firebase v9 modular SDK setup — initializes the app once, exports `db`, `storage`
+  postsService.ts      Firestore reads/writes for posts: fetchPosts(), addPost(); uploadPostPhotos()
+                        for Storage uploads
   filterProperties.ts  Pure filter function (type + price range), reusable/testable
   createPostForm.ts    Create-post form state, defaults, and validation/parsing (kept out of the UI)
   rentInsights.ts      Pure average-rent / rent-paid-range calculations over visible properties
   format.ts            Shared currency formatter (₹, abbreviated to lakhs)
-  matching.ts          Finds nearby, in-budget Rent posts for a Requirement post
-  geo.ts               Haversine distance calculation (km) between two lat/lng points
 types/
   post.ts            PostType, GenderPreference, LatLng, Property, NewProperty, colors, map center
 data/
@@ -121,12 +133,14 @@ scripts/
 - **Card-style popups**: `MapView`'s info window HTML uses Tailwind utility
   classes directly in the template string (Tailwind's content scanner picks
   these up as plain text, no React needed) — a colored top accent bar, an
-  icon badge, title, and price. Google's own InfoWindow chrome (padding,
-  shadow, border-radius, tail, close button) is overridden in `globals.css`
-  so the card reads as the entire popup. Unlike Mapbox's stable, documented
-  class names, Google's InfoWindow classes (`.gm-style-iw-*`) aren't
-  officially guaranteed — if a future Maps JS API update changes them and
-  popups look "boxed in" again, re-inspect the DOM and adjust the selectors.
+  icon badge (+ a "✓ Verified" badge when the post has photos), title,
+  price, every filled-in flat-detail field, description, and photo
+  thumbnails. Google's own InfoWindow chrome (padding, shadow,
+  border-radius, tail, close button) is overridden in `globals.css` so the
+  card reads as the entire popup. Unlike Mapbox's stable, documented class
+  names, Google's InfoWindow classes (`.gm-style-iw-*`) aren't officially
+  guaranteed — if a future Maps JS API update changes them and popups look
+  "boxed in" again, re-inspect the DOM and adjust the selectors.
 - **Icon markers**: each marker is a colored circular badge with a white
   type icon inside, built as an inline SVG data URI
   (`buildMarkerIconUrl` in `MapView.tsx`) from the same icon path data as
@@ -158,29 +172,6 @@ scripts/
   - `ResultsCount`, `PickLocationBanner`, and `SelectedLocationBadge` all
     swap to shorter copy or truncate on mobile so nothing overflows the
     viewport width.
-- **Property matching**: "Requirement" posts represent someone "Looking
-  for property". `lib/matching.ts`'s `findMatchingRentPosts()` finds
-  **Rent** posts that are:
-  - **Within budget** — priced at or under the requirement's stated price,
-    plus a 15% tolerance (`BUDGET_TOLERANCE` in `lib/matching.ts`) so a
-    listing just slightly over budget still shows up, since real searches
-    aren't usually that strict.
-  - **Nearby** — within 5 km (`MATCH_RADIUS_KM`) of the requirement's
-    pinned location, using a haversine great-circle distance
-    (`lib/geo.ts`) rather than naive lat/lng differences.
-  Matches are sorted nearest-first. Both constants are simple exported
-  values in `lib/matching.ts` if you want to tune them.
-  - **Triggered automatically**: right after creating a Requirement post,
-    `MatchesPanel` appears showing "N matching properties found" (or "1
-    matching property found" / a "no matches yet" message), listing each
-    match's title, price, and distance.
-  - **Also available on demand**: any existing Requirement post's map
-    popup has a **"Find matches"** button that re-runs the same search
-    against the current post list — handled via event delegation in
-    `MapView` since popup content is raw HTML, not React.
-  - Clicking a match in the panel flies the map to that listing and opens
-    its popup (`MapView`'s `focusRequest` prop), so the result of a match
-    is immediately visible rather than just a name in a list.
 - **Rent insights**: `lib/rentInsights.ts` derives two figures purely from
   the currently *visible* markers (`filteredProperties` — i.e. whatever
   survives the active type/budget filters):
@@ -212,8 +203,24 @@ scripts/
     pre-fills Latitude/Longitude from `selectedLocation` automatically.
   - The pin persists across a cancelled form; it only clears once the post
     is actually created (or you tap ✕).
+- **Price vs. Monthly rent**: the form shows exactly one amount field,
+  depending on Post Type — **Sale** shows "Price" (a one-time amount);
+  **Rent**, **Sharing**, and **Rent Paid** show "Monthly rent" (a recurring
+  amount) instead. Whichever one is shown, `buildPropertyFromForm` in
+  `lib/createPostForm.ts` writes that value into both `price` and
+  `monthlyRent` on the resulting post, so the map popup and the budget
+  filter (which both key off `price`) work the same regardless of type.
+- **Photos & "Verified" badge**: the Create Post form lets you attach up to
+  5 photos, uploaded to Firebase Storage on submit
+  (`uploadPostPhotos` in `lib/postsService.ts`) with the resulting URLs
+  saved on the post as `photoUrls`. There's no separate identity/phone
+  verification step — a post with at least one photo simply renders a "✓
+  Verified" badge on its map card, treating "the poster bothered to attach
+  photos" as the trust signal. If Firebase isn't configured (demo mode),
+  photos still preview via local blob URLs but aren't persisted anywhere.
 - **Create Post flow** (now backed by Firestore):
-  - The form always has Post Type, Title, Price, Latitude, and Longitude.
+  - The form always has Post Type, Title, the Price/Monthly rent field
+    (see above), Latitude, and Longitude.
   - Choosing **Sharing** reveals a **Gender preference** dropdown (in an
     amber-tinted panel); choosing **Rent Paid** reveals an **anonymous**
     toggle switch (in a purple-tinted panel) — stored as optional
@@ -222,21 +229,26 @@ scripts/
     crosshair, and shows `PickLocationBanner`; the next map click updates
     both the form and the temp pin, then reopens the modal.
   - On submit, `lib/createPostForm.ts` validates the form into a
-    `NewProperty` (no id yet), which `lib/postsService.ts`'s `addPost()`
-    writes to Firestore via `addDoc`; the returned document id becomes the
-    post's `id`. The new post is appended straight to `posts` state (no
-    need to re-fetch the whole collection), so the marker appears
-    immediately — subject to the currently active filters, exactly like
-    any other post. While the write is in flight, the modal's buttons
-    disable and the submit button reads "Saving…"; if it fails, the error
-    surfaces inline in the form and nothing is added until it succeeds.
+    `NewProperty` (no id yet); any picked photos are uploaded first (see
+    above), then `lib/postsService.ts`'s `addPost()` writes the post,
+    photo URLs included, to Firestore via `addDoc`; the returned document
+    id becomes the post's `id`. The new post is appended straight to
+    `posts` state (no need to re-fetch the whole collection), so the
+    marker appears immediately — subject to the currently active filters,
+    exactly like any other post. While the write is in flight, the modal's
+    buttons disable and the submit button reads "Saving…"; if it fails,
+    the error surfaces inline in the form and nothing is added until it
+    succeeds.
 - **Firestore integration**:
   - `lib/firebase.ts` initializes the Firebase v9 modular SDK once (guarded
-    against Next.js's dev-mode hot reloads) and exports `db`, the Firestore
-    instance, plus `isFirebaseConfigured` (true once real env vars are set).
-  - `lib/postsService.ts` has exactly two functions: `fetchPosts()` (reads
-    the whole `posts` collection with `getDocs`) and `addPost()` (writes one
-    document with `addDoc` and returns it with its new id). Both use the
+    against Next.js's dev-mode hot reloads) and exports `db` (Firestore),
+    `storage` (Storage, for photo uploads), plus `isFirebaseConfigured`
+    (true once real env vars are set).
+  - `lib/postsService.ts` has `fetchPosts()` (reads
+    the whole `posts` collection with `getDocs`), `addPost()` (writes one
+    document with `addDoc` and returns it with its new id), and
+    `uploadPostPhotos()` (uploads files to Storage via `uploadBytes` and
+    resolves their `getDownloadURL()`s). The Firestore functions use the
     modular `firebase/firestore` imports (`collection`, `addDoc`, `getDocs`)
     rather than the old namespaced v8 API.
   - `app/page.tsx` calls `fetchPosts()` once in a `useEffect` on load. If

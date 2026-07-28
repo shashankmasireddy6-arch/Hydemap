@@ -25,6 +25,8 @@ const inputClasses =
 
 const labelClasses = "text-xs font-medium text-slate-500";
 
+const MAX_PHOTOS = 5;
+
 export default function CreatePostModal({
   isOpen,
   form,
@@ -54,9 +56,34 @@ export default function CreatePostModal({
     return () => clearTimeout(timeout);
   }, [isOpen]);
 
+  // Local preview URLs for the picked photo files — regenerated whenever
+  // the file list changes, revoked on cleanup to avoid leaking blob URLs.
+  const [photoPreviews, setPhotoPreviews] = useState<string[]>([]);
+  useEffect(() => {
+    const urls = form.photos.map((file) => URL.createObjectURL(file));
+    setPhotoPreviews(urls);
+    return () => urls.forEach((url) => URL.revokeObjectURL(url));
+  }, [form.photos]);
+
   if (!shouldRender) return null;
 
   const hasLocation = form.latitude.trim() !== "" && form.longitude.trim() !== "";
+  // "Rent"-flavored posts collect a recurring monthly amount; "Sale"
+  // collects a one-time price — see buildPropertyFromForm, which folds
+  // whichever one is shown into both `price` and `monthlyRent` on submit.
+  const showsMonthlyRent =
+    form.type === "Rent" || form.type === "Sharing" || form.type === "Rent Paid";
+
+  const handlePhotosChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const selected = Array.from(e.target.files ?? []);
+    if (selected.length === 0) return;
+    onChange({ photos: [...form.photos, ...selected].slice(0, MAX_PHOTOS) });
+    e.target.value = ""; // allow re-selecting the same file later
+  };
+
+  const handleRemovePhoto = (index: number) => {
+    onChange({ photos: form.photos.filter((_, i) => i !== index) });
+  };
 
   return (
     <div
@@ -126,26 +153,29 @@ export default function CreatePostModal({
             />
           </div>
 
-          {/* Price */}
-          <div className="flex flex-col gap-1">
-            <label htmlFor="price" className={labelClasses}>
-              Price
-            </label>
-            <div className="relative">
-              <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-slate-400">
-                ₹
-              </span>
-              <input
-                id="price"
-                type="number"
-                min={0}
-                value={form.price}
-                onChange={(e) => onChange({ price: e.target.value })}
-                placeholder="18000"
-                className={`${inputClasses} pl-7`}
-              />
+          {/* Price — only for one-time-amount types; Rent-flavored types
+              collect a monthly amount instead, see "Monthly rent" below. */}
+          {!showsMonthlyRent && (
+            <div className="flex flex-col gap-1">
+              <label htmlFor="price" className={labelClasses}>
+                Price
+              </label>
+              <div className="relative">
+                <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-slate-400">
+                  ₹
+                </span>
+                <input
+                  id="price"
+                  type="number"
+                  min={0}
+                  value={form.price}
+                  onChange={(e) => onChange({ price: e.target.value })}
+                  placeholder="18000"
+                  className={`${inputClasses} pl-7`}
+                />
+              </div>
             </div>
-          </div>
+          )}
 
           {/* Location */}
           <div className="flex flex-col gap-1.5 rounded-xl bg-slate-50 p-3">
@@ -230,28 +260,30 @@ export default function CreatePostModal({
                 </div>
               </div>
 
-              <div className="flex flex-col gap-1">
-                <label htmlFor="monthlyRent" className={labelClasses}>
-                  Monthly rent
-                </label>
-                <div className="relative">
-                  <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-slate-400">
-                    ₹
-                  </span>
-                  <input
-                    id="monthlyRent"
-                    type="text"
-                    inputMode="numeric"
-                    pattern="[0-9]*"
-                    value={form.monthlyRent}
-                    onChange={(e) =>
-                      onChange({ monthlyRent: e.target.value.replace(/[^0-9]/g, "") })
-                    }
-                    placeholder="18000"
-                    className={`${inputClasses} bg-white pl-7`}
-                  />
+              {showsMonthlyRent && (
+                <div className="flex flex-col gap-1">
+                  <label htmlFor="monthlyRent" className={labelClasses}>
+                    Monthly rent
+                  </label>
+                  <div className="relative">
+                    <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-slate-400">
+                      ₹
+                    </span>
+                    <input
+                      id="monthlyRent"
+                      type="text"
+                      inputMode="numeric"
+                      pattern="[0-9]*"
+                      value={form.monthlyRent}
+                      onChange={(e) =>
+                        onChange({ monthlyRent: e.target.value.replace(/[^0-9]/g, "") })
+                      }
+                      placeholder="18000"
+                      className={`${inputClasses} bg-white pl-7`}
+                    />
+                  </div>
                 </div>
-              </div>
+              )}
 
               <div className="flex flex-col gap-1">
                 <label htmlFor="furnishing" className={labelClasses}>
@@ -427,6 +459,55 @@ export default function CreatePostModal({
                 className={inputClasses}
               />
             </div>
+          </div>
+
+          {/* Photos — optional, but posts with at least one get a
+              "Verified" badge on the map card in place of formal ID/phone
+              verification. */}
+          <div className="flex flex-col gap-2 rounded-xl border border-dashed border-slate-200 p-3">
+            <div className="flex items-center justify-between">
+              <span className={labelClasses}>
+                Photos <span className="text-slate-400">(shows a "Verified" badge)</span>
+              </span>
+              <span className="text-[11px] text-slate-400">
+                {form.photos.length}/{MAX_PHOTOS}
+              </span>
+            </div>
+
+            {photoPreviews.length > 0 && (
+              <div className="flex flex-wrap gap-2">
+                {photoPreviews.map((url, index) => (
+                  <div
+                    key={url}
+                    className="relative h-16 w-16 shrink-0 overflow-hidden rounded-lg border border-slate-200"
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element -- local blob preview, not a remote asset */}
+                    <img src={url} alt="" className="h-full w-full object-cover" />
+                    <button
+                      type="button"
+                      onClick={() => handleRemovePhoto(index)}
+                      aria-label="Remove photo"
+                      className="absolute right-0.5 top-0.5 rounded-full bg-slate-900/60 p-0.5 text-white transition hover:bg-slate-900/80"
+                    >
+                      <CloseIcon className="h-2.5 w-2.5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {form.photos.length < MAX_PHOTOS && (
+              <label className="flex cursor-pointer items-center justify-center rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-indigo-600 transition hover:bg-indigo-50">
+                Add photo
+                <input
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  onChange={handlePhotosChange}
+                  className="hidden"
+                />
+              </label>
+            )}
           </div>
 
           {/* Extra field: gender preference, Sharing posts only */}

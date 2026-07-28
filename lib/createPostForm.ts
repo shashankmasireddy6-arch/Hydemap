@@ -15,7 +15,9 @@ const MS_PER_DAY = 24 * 60 * 60 * 1000;
 export interface CreatePostFormState {
   type: PostType;
   title: string;
-  price: string; // kept as string while editing, parsed on submit
+  price: string; // kept as string while editing, parsed on submit. Used
+  // for "Sale"; "Rent"/"Sharing"/"Rent Paid" use `monthlyRent` instead —
+  // see buildPropertyFromForm.
   latitude: string;
   longitude: string;
   genderPreference: GenderPreference; // used when type === "Sharing"
@@ -39,6 +41,11 @@ export interface CreatePostFormState {
   squareFootage: string;
   email: string; // never shown to other users, see NewProperty
   description: string;
+
+  // Raw files picked in the modal, uploaded to Firebase Storage on submit
+  // (see handleSubmit in app/page.tsx) — the resulting URLs, not these
+  // files, end up on the post.
+  photos: File[];
 }
 
 export const DEFAULT_CREATE_POST_FORM: CreatePostFormState = {
@@ -65,7 +72,13 @@ export const DEFAULT_CREATE_POST_FORM: CreatePostFormState = {
   squareFootage: "",
   email: "",
   description: "",
+  photos: [],
 };
+
+// Types where the amount the user enters is a recurring monthly cost
+// ("Monthly rent" field is shown); everything else collects a one-time
+// amount via the "Price" field. See CreatePostModal's `showsMonthlyRent`.
+const RECURRING_TYPES: PostType[] = ["Rent", "Sharing", "Rent Paid"];
 
 export interface CreatePostResult {
   data?: NewProperty;
@@ -96,11 +109,6 @@ export function buildPropertyFromForm(form: CreatePostFormState): CreatePostResu
     return { error: "Title is required." };
   }
 
-  const price = Number(form.price);
-  if (!form.price.trim() || Number.isNaN(price) || price < 0) {
-    return { error: "Enter a valid price." };
-  }
-
   const latitude = Number(form.latitude);
   const longitude = Number(form.longitude);
   const hasValidCoords =
@@ -117,9 +125,15 @@ export function buildPropertyFromForm(form: CreatePostFormState): CreatePostResu
     return { error: "Pick a location on the map or enter valid coordinates." };
   }
 
-  const monthlyRent = Number(form.monthlyRent);
-  if (!form.monthlyRent.trim() || Number.isNaN(monthlyRent) || monthlyRent < 0) {
-    return { error: "Enter a valid monthly rent." };
+  // "Rent"/"Sharing"/"Rent Paid" collect a recurring monthly amount via the
+  // "Monthly rent" field; "Sale" collects a one-time amount via "Price".
+  // Both are folded into `price` and `monthlyRent` on the resulting post so
+  // existing consumers (map popup, budget filter) keep working either way.
+  const isRecurring = RECURRING_TYPES.includes(form.type);
+  const amountStr = isRecurring ? form.monthlyRent : form.price;
+  const amount = Number(amountStr);
+  if (!amountStr.trim() || Number.isNaN(amount) || amount < 0) {
+    return { error: isRecurring ? "Enter a valid monthly rent." : "Enter a valid price." };
   }
 
   const deposit = parseOptionalNonNegative(form.deposit);
@@ -147,12 +161,12 @@ export function buildPropertyFromForm(form: CreatePostFormState): CreatePostResu
   const data: NewProperty = {
     type: form.type,
     title,
-    price,
+    price: amount,
     latitude,
     longitude,
     expiresAt: Date.now() + form.duration * MS_PER_DAY,
     bhk: form.bhk,
-    monthlyRent,
+    monthlyRent: amount,
     furnishing: form.furnishing,
     gatedSociety: form.gatedSociety,
     parking,

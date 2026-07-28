@@ -12,10 +12,6 @@ import { POST_TYPE_ICON_MARKUP } from "@/components/icons";
 // "Credentials" and restrict it to your domain(s).
 const GOOGLE_MAPS_API_KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || "YOUR_GOOGLE_MAPS_API_KEY";
 
-interface FocusRequest {
-  id: string;
-}
-
 interface MapViewProps {
   properties: Property[];
   onMapClick?: (lng: number, lat: number) => void;
@@ -23,13 +19,6 @@ interface MapViewProps {
   // A location the user has tapped but not yet turned into a post — shown
   // as a distinct pin so it reads differently from real posts.
   pendingLocation?: LatLng | null;
-  // Called when someone clicks "Find matches" inside a Requirement post's
-  // popup (see buildPopupHtml below).
-  onFindMatches?: (property: Property) => void;
-  // Set (to a new object, even for the same id) to pan the map to a given
-  // marker and open its info window — used when selecting a match from
-  // the matches panel.
-  focusRequest?: FocusRequest | null;
 }
 
 const formatPrice = (value: number) => `₹${value.toLocaleString("en-IN")}`;
@@ -59,25 +48,81 @@ function buildMarkerIconUrl(property: Property): string {
   return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
 }
 
+// Types that carry a recurring monthly amount (see buildPropertyFromForm,
+// which folds the user's input into `price` either way) vs. a one-time
+// amount, purely to label the price line correctly.
+const RECURRING_TYPES: Property["type"][] = ["Rent", "Sharing", "Rent Paid"];
+
+function buildDetailRows(property: Property): string {
+  const rows: [string, string | undefined][] = [
+    ["BHK", property.bhk],
+    ["Furnishing", property.furnishing],
+    ["Gated society", property.gatedSociety],
+    ["Maintenance", property.maintenanceIncluded ? "Included" : undefined],
+    ["Occupants", property.occupants],
+    ["Pets", property.pets],
+    ["Deposit", property.deposit !== undefined ? formatPrice(property.deposit) : undefined],
+    ["Parking", property.parking !== undefined ? String(property.parking) : undefined],
+    [
+      "Square footage",
+      property.squareFootage !== undefined ? `${property.squareFootage} sqft` : undefined,
+    ],
+    property.type === "Sharing"
+      ? ["Gender preference", property.genderPreference]
+      : ["", undefined],
+    property.type === "Rent Paid" && property.anonymous ? ["Posted", "Anonymously"] : ["", undefined],
+  ];
+
+  return rows
+    .filter(([label, value]) => label && value)
+    .map(
+      ([label, value]) =>
+        `<div class="flex items-center justify-between gap-3"><span class="text-slate-500">${label}</span><span class="font-medium text-slate-800">${escapeHtml(
+          value as string
+        )}</span></div>`
+    )
+    .join("");
+}
+
+// Modern card-style popup: colored top accent, icon + type label (+
+// verified badge), title, price, an at-a-glance grid of every filled-in
+// detail, description, and photo thumbnails. Google's own InfoWindow
+// chrome (padding/shadow/tail/close button) is overridden in globals.css
+// so this card reads as the whole popup.
 function buildPopupHtml(property: Property): string {
   const color = getPostColor(property.type);
   const title = escapeHtml(property.title);
+  const priceLabel = RECURRING_TYPES.includes(property.type)
+    ? `${formatPrice(property.price)}/mo`
+    : formatPrice(property.price);
 
-  // Requirement posts ("Looking for property") get a "Find matches" button
-  // that surfaces nearby, in-budget Rent posts. Handled via event
-  // delegation on the map container (see handleContainerClick below),
-  // since InfoWindow content is raw HTML rather than React.
-  const findMatchesButton =
-    property.type === "Requirement"
-      ? `<button type="button" class="find-matches-btn mt-3 w-full rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-indigo-500" data-property-id="${property.id}">Find matches</button>`
-      : "";
+  // A post with at least one uploaded photo is treated as the app's
+  // lightweight "legit" signal — no verification infra needed.
+  const isVerified = !!property.photoUrls?.length;
+  const verifiedBadge = isVerified
+    ? `<span class="ml-1 inline-flex items-center gap-0.5 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700">✓ Verified</span>`
+    : "";
 
-  // Modern card-style popup: colored top accent, icon + type label, title,
-  // and price. Google's own InfoWindow chrome (padding/shadow/tail/close
-  // button) is overridden in globals.css so this card reads as the whole
-  // popup.
+  const detailRows = buildDetailRows(property);
+  const detailsMarkup = detailRows
+    ? `<div class="mt-2.5 flex flex-col gap-1 border-t border-slate-100 pt-2.5 text-xs">${detailRows}</div>`
+    : "";
+
+  const descriptionMarkup = property.description
+    ? `<p class="mt-2.5 text-xs leading-snug text-slate-600">${escapeHtml(property.description)}</p>`
+    : "";
+
+  const photosMarkup = property.photoUrls?.length
+    ? `<div class="mt-2.5 flex gap-1.5 overflow-x-auto">${property.photoUrls
+        .map(
+          (url) =>
+            `<img src="${escapeHtml(url)}" class="h-16 w-16 shrink-0 rounded-lg border border-slate-100 object-cover" />`
+        )
+        .join("")}</div>`
+    : "";
+
   return `
-    <div class="w-56 font-sans">
+    <div class="w-64 font-sans">
       <div class="h-1.5 w-full" style="background-color: ${color}"></div>
       <div class="p-4">
         <div class="mb-2 flex items-center gap-1.5">
@@ -87,10 +132,13 @@ function buildPopupHtml(property: Property): string {
             </svg>
           </span>
           <span class="text-[11px] font-semibold uppercase tracking-wide text-slate-500">${property.type}</span>
+          ${verifiedBadge}
         </div>
         <h3 class="mb-1 text-sm font-semibold leading-snug text-slate-900">${title}</h3>
-        <p class="text-base font-bold text-slate-900">${formatPrice(property.price)}</p>
-        ${findMatchesButton}
+        <p class="text-base font-bold text-slate-900">${priceLabel}</p>
+        ${detailsMarkup}
+        ${descriptionMarkup}
+        ${photosMarkup}
       </div>
     </div>
   `;
@@ -101,8 +149,6 @@ export default function MapView({
   onMapClick,
   isPickingLocation,
   pendingLocation,
-  onFindMatches,
-  focusRequest,
 }: MapViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<google.maps.Map | null>(null);
@@ -118,17 +164,10 @@ export default function MapView({
   const infoWindowsRef = useRef<Map<string, google.maps.InfoWindow>>(new Map());
   const pendingMarkerRef = useRef<google.maps.Marker | null>(null);
 
-  // Holds the latest callbacks/data without forcing listeners to be
+  // Holds the latest callback without forcing the click listener to be
   // re-attached every render.
   const onMapClickRef = useRef(onMapClick);
   onMapClickRef.current = onMapClick;
-  const onFindMatchesRef = useRef(onFindMatches);
-  onFindMatchesRef.current = onFindMatches;
-  const propertiesRef = useRef(properties);
-  propertiesRef.current = properties;
-  // Holds the teardown for the delegated "Find matches" click listener,
-  // set once the map (and its container div) exist.
-  const containerClickCleanupRef = useRef<(() => void) | null>(null);
 
   // Load the Maps JS API and initialize the map once on mount.
   useEffect(() => {
@@ -157,21 +196,6 @@ export default function MapView({
           onMapClickRef.current?.(e.latLng.lng(), e.latLng.lat());
         });
 
-        // Popup/info-window content is raw HTML (not React), so "Find
-        // matches" clicks are caught via delegation on the map's
-        // container rather than a per-window listener.
-        const container = map.getDiv();
-        const handleContainerClick = (e: MouseEvent) => {
-          const button = (e.target as HTMLElement).closest<HTMLButtonElement>(".find-matches-btn");
-          if (!button) return;
-          const propertyId = button.dataset.propertyId;
-          const property = propertiesRef.current.find((p) => p.id === propertyId);
-          if (property) onFindMatchesRef.current?.(property);
-        };
-        container.addEventListener("click", handleContainerClick);
-        containerClickCleanupRef.current = () =>
-          container.removeEventListener("click", handleContainerClick);
-
         setIsMapReady(true);
       })
       .catch((err) => {
@@ -180,7 +204,6 @@ export default function MapView({
 
     return () => {
       cancelled = true;
-      containerClickCleanupRef.current?.();
       markersRef.current.forEach((marker) => marker.setMap(null));
       markersRef.current.clear();
       infoWindowsRef.current.forEach((infoWindow) => infoWindow.close());
@@ -287,23 +310,6 @@ export default function MapView({
       });
     }
   }, [pendingLocation, isMapReady]);
-
-  // Selecting a match in the matches panel pans the map to that marker
-  // and opens its info window, so the result of a match is visible
-  // immediately.
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map || !isMapReady || !focusRequest) return;
-
-    const marker = markersRef.current.get(focusRequest.id);
-    const infoWindow = infoWindowsRef.current.get(focusRequest.id);
-    if (!marker) return;
-
-    const position = marker.getPosition();
-    if (position) map.panTo(position);
-    map.setZoom(15);
-    infoWindow?.open({ map, anchor: marker });
-  }, [focusRequest, isMapReady]);
 
   return <div ref={containerRef} className="absolute inset-0" />;
 }

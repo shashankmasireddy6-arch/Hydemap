@@ -2,7 +2,6 @@ export type PostType =
   | "Rent"
   | "Sale"
   | "Sharing"
-  | "Requirement"
   | "Rent Paid";
 
 export type GenderPreference = "Male" | "Female" | "Any";
@@ -49,6 +48,9 @@ export interface Property {
   parking?: number;
   squareFootage?: number;
   description?: string;
+  // Download URLs for photos uploaded to Firebase Storage. A post with at
+  // least one photo is treated as "verified" in the UI.
+  photoUrls?: string[];
 }
 
 // Fields for a post that hasn't been saved yet — Firestore assigns the id
@@ -81,7 +83,6 @@ export const POST_TYPE_CONFIG: PostTypeConfig[] = [
   { label: "Rent", color: "#22c55e" },
   { label: "Sale", color: "#3b82f6" },
   { label: "Sharing", color: "#eab308" },
-  { label: "Requirement", color: "#ef4444" },
   { label: "Rent Paid", color: "#a855f7" },
 ];
 
