@@ -14,7 +14,8 @@ import SearchBar from "@/components/SearchBar";
 import MapControls from "@/components/MapControls";
 import { LatLng, PostType, Property } from "@/types/post";
 import { filterProperties } from "@/lib/filterProperties";
-import { calculateAverageRent, calculateRentPaidRange } from "@/lib/rentInsights";
+import { calculateNearbyAverageRent, calculateRentPaidRange } from "@/lib/rentInsights";
+import { useMapCenter } from "@/lib/useMapCenter";
 import {
   buildPropertyFromForm,
   CreatePostFormState,
@@ -59,6 +60,8 @@ export default function HomePage() {
   // The underlying google.maps.Map instance, handed up by MapView once
   // created — lets SearchBar drive panTo/zoom/markers directly.
   const [map, setMap] = useState<google.maps.Map | null>(null);
+  // Debounced on pan/zoom — drives the "nearby" average-rent radius below.
+  const mapCenter = useMapCenter(map);
 
   // Fetch posts from Firestore once on load.
   useEffect(() => {
@@ -105,11 +108,14 @@ export default function HomePage() {
     [posts, selectedType, budget]
   );
 
-  // Rent insights are derived from whatever is currently visible on the
-  // map, so panning/filtering to a different area recomputes them live.
+  // Average rent within 3km of the map's current center (see
+  // lib/rentInsights.ts) — still respects the active type/budget filters
+  // (filteredProperties), the distance check is on top of those, not
+  // instead of them. Recomputes as the map pans (mapCenter) or filters
+  // change.
   const averageRent = useMemo(
-    () => calculateAverageRent(filteredProperties),
-    [filteredProperties]
+    () => calculateNearbyAverageRent(mapCenter, filteredProperties),
+    [mapCenter, filteredProperties]
   );
   const rentPaidRange = useMemo(
     () => calculateRentPaidRange(filteredProperties),

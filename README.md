@@ -130,8 +130,10 @@ lib/
                         for Storage uploads
   filterProperties.ts  Pure filter function (type + price range), reusable/testable
   createPostForm.ts    Create-post form state, defaults, and validation/parsing (kept out of the UI)
-  rentInsights.ts      Pure average-rent / rent-paid-range calculations over visible properties
+  rentInsights.ts      Nearby (3km) average-rent + rent-paid-range calculations
   format.ts            Shared currency formatter (₹, abbreviated to lakhs)
+  geo.ts                haversineDistanceKm() — great-circle distance between two lat/lngs
+  useMapCenter.ts        Debounced map-center tracking hook (backs the nearby average-rent radius)
   aqi.ts                WAQI fetch + the Good/Moderate/Poor categorization for the AQI control
   useAqi.ts             Debounced fetch-on-pan hook backing the AQI control (see MapControls.tsx)
 types/
@@ -190,18 +192,29 @@ scripts/
   - `ResultsCount`, `PickLocationBanner`, and `SelectedLocationBadge` all
     swap to shorter copy or truncate on mobile so nothing overflows the
     viewport width.
-- **Rent insights**: `lib/rentInsights.ts` derives two figures purely from
-  the currently *visible* markers (`filteredProperties` — i.e. whatever
-  survives the active type/budget filters):
-  - `calculateAverageRent` averages the `price` of visible **Rent** posts.
-  - `calculateRentPaidRange` takes the min/max `price` across visible
-    **Rent Paid** posts — kept as a separate group from "Rent", since a
-    settled rent and an asking rent aren't the same signal.
+- **Rent insights**: `lib/rentInsights.ts` derives two figures, both scoped
+  by the active type/budget filters (`filteredProperties`) first:
+  - `calculateNearbyAverageRent(center, properties, radiusKm = 3)` further
+    filters to **Rent** posts within a 3km Haversine great-circle distance
+    (`lib/geo.ts#haversineDistanceKm`) of `center`, then
+    `avg = total_rent / number_of_listings`. `center` is the map's current
+    center, tracked (debounced 500ms on pan/zoom) by `lib/useMapCenter.ts`
+    — a plain synchronous `map.getCenter()` read, no network fetch, so no
+    coalescing/abort logic needed there, just the debounce. Distance
+    filtering happens client-side over the already-fetched `posts` array
+    rather than as a Firestore geo-query, since Firestore has no native
+    radius query without extra geohashing infra (e.g. `geofirestore`) —
+    not worth it at this app's scale, where the whole collection is
+    already loaded into memory anyway.
+  - `calculateRentPaidRange` takes the min/max `price` across (filtered,
+    but not distance-limited) **Rent Paid** posts — kept as a separate
+    group from "Rent", since a settled rent and an asking rent aren't the
+    same signal.
   `RentInsightsCard` renders "Average rent in this area: ₹X" and/or "People
   are paying between ₹X – ₹Y" in the top stack, right below the filter bar,
-  and recomputes live as filters or the map's visible set change. If
-  neither group has any visible posts, the card renders nothing at all
-  rather than showing an empty box.
+  recomputing live as the map pans or filters change. If neither group has
+  any qualifying posts, the card renders nothing at all rather than
+  showing an empty box.
   (Currency is shown as ₹ to stay consistent with the rest of the app,
   since it's Hyderabad-based — swap `lib/format.ts` if you need a different
   currency symbol.)
