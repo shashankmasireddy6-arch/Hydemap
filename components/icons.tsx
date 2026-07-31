@@ -180,6 +180,18 @@ export function SatelliteIcon({ className }: IconProps) {
   );
 }
 
+export function AqiIcon({ className }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} {...strokeProps}>
+      <g className={base}>
+        <path d="M3 8h11a2.5 2.5 0 1 0-2.5-2.5" />
+        <path d="M3 12h15a2.5 2.5 0 1 1-2.5 2.5" />
+        <path d="M3 16h8a2 2 0 1 1-2 2" />
+      </g>
+    </svg>
+  );
+}
+
 /**
  * Single source of truth for the per-post-type icon, reused by the legend,
  * the filter dropdown, and (as raw SVG markup) the map markers/popups.

@@ -80,6 +80,18 @@ If Storage isn't enabled, uploads will fail; the Create Post form will show
 an error rather than silently dropping the photos. Free tier is 5GB stored /
 1GB downloaded per day, which comfortably covers small/personal use.
 
+### WAQI API token (AQI map control)
+
+The "AQI" map control fetches real air-quality readings from
+[WAQI](https://waqi.info) (World Air Quality Index) — free, no credit card:
+
+1. Get a token at https://aqicn.org/data-platform/token/ (just an email).
+2. Set `NEXT_PUBLIC_WAQI_TOKEN` in `.env.local` (see `.env.local.example`).
+3. Restart `npm run dev`.
+
+Without a token, toggling AQI on shows an inline error explaining that
+`NEXT_PUBLIC_WAQI_TOKEN` is missing, rather than failing silently.
+
 ## Run
 
 ```bash
@@ -108,6 +120,10 @@ components/
   PickLocationBanner.tsx    "Tap the map to set the pin" banner shown while re-picking
   SelectedLocationBadge.tsx "📍 lat, lng · Add post here · ✕" shortcut shown after a map click
   RentInsightsCard.tsx      Small floating card: average rent + rent-paid range for visible markers
+  SearchBar.tsx             Location search (OpenStreetMap Nominatim) — pans/zooms the map and
+                             drops a marker on a selected result
+  MapControls.tsx           Floating top-right panel: Metro lines (Google TransitLayer), Satellite
+                             toggle, and the AQI indicator
 lib/
   firebase.ts          Firebase v9 modular SDK setup — initializes the app once, exports `db`, `storage`
   postsService.ts      Firestore reads/writes for posts: fetchPosts(), addPost(); uploadPostPhotos()
@@ -116,6 +132,8 @@ lib/
   createPostForm.ts    Create-post form state, defaults, and validation/parsing (kept out of the UI)
   rentInsights.ts      Pure average-rent / rent-paid-range calculations over visible properties
   format.ts            Shared currency formatter (₹, abbreviated to lakhs)
+  aqi.ts                WAQI fetch + the Good/Moderate/Poor categorization for the AQI control
+  useAqi.ts             Debounced fetch-on-pan hook backing the AQI control (see MapControls.tsx)
 types/
   post.ts            PostType, GenderPreference, LatLng, Property, NewProperty, colors, map center
 data/
@@ -255,3 +273,19 @@ scripts/
     Firebase isn't configured yet, or the fetch throws, it falls back to
     the bundled `data/properties.json` and shows a small "Showing demo
     data" notice instead of crashing or showing a blank map.
+- **AQI control**: `lib/useAqi.ts` fetches WAQI's AQI reading for the
+  current map *center* (not the visible bounds — a single point, unlike
+  the removed train/bus controls which queried an area) while the toggle
+  is on, refetching (debounced 800ms) as the map is panned. AQI is
+  collapsed from the standard 6-tier scale into three buckets per the
+  original ask: 0–50 Good (green), 51–100 Moderate (yellow), 101+ Poor
+  (red) — see `categorize()` in `lib/aqi.ts` if finer-grained tiers are
+  wanted later. Uses the same coalesce-in-flight-requests pattern as
+  `lib/useOverpassMarkers.ts` (finish the current fetch, then run once
+  more with the latest center) rather than aborting and restarting on
+  every pan — that pattern was found, on the train/bus controls, to be
+  able to prevent any request from ever completing under rapid pan/zoom.
+  A heatmap overlay (mentioned as optional in the original ask) isn't
+  implemented — WAQI's free tier only returns one point reading per
+  request, so a smooth heatmap would mean tens of calls across a grid on
+  every pan, which isn't a good fit for the free tier's rate limits.
