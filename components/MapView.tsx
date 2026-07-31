@@ -182,13 +182,7 @@ export default function MapView({
     if (!containerRef.current || mapRef.current) return;
     let cancelled = false;
 
-    // "places" is needed for the location search bar's Autocomplete widget
-    // (see components/SearchBar.tsx).
-    const loader = new Loader({
-      apiKey: GOOGLE_MAPS_API_KEY,
-      version: "weekly",
-      libraries: ["places"],
-    });
+    const loader = new Loader({ apiKey: GOOGLE_MAPS_API_KEY, version: "weekly" });
 
     loader
       .load()
