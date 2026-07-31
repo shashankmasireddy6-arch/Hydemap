@@ -43,6 +43,7 @@ export function useOverpassMarkers({
   const pendingRefetchRef = useRef(false);
   const [isLoading, setIsLoading] = useState(false);
   const [needsZoom, setNeedsZoom] = useState(false);
+  const [error, setError] = useState<string | undefined>(undefined);
 
   useEffect(() => {
     const clearMarkers = () => {
@@ -57,6 +58,7 @@ export function useOverpassMarkers({
       clearMarkers();
       setIsLoading(false);
       setNeedsZoom(false);
+      setError(undefined);
       return;
     }
 
@@ -98,9 +100,15 @@ export function useOverpassMarkers({
               icon,
             })
         );
+        setError(undefined);
       } catch (err) {
         if ((err as Error).name !== "AbortError") {
+          // Previously this only went to console.error — a failed fetch
+          // (rate limit, network blip, ad-blocker on the Overpass domain,
+          // ...) looked identical to "no results in this area" from the
+          // user's side, with zero visible feedback. Surface it instead.
           console.error("Failed to fetch nearby places:", err);
+          setError("Couldn't load nearby stations/stops. Try again.");
         }
       } finally {
         isFetchingRef.current = false;
@@ -127,5 +135,5 @@ export function useOverpassMarkers({
     };
   }, [map, enabled, fetchPlaces, buildIcon, minZoom]);
 
-  return { isLoading, needsZoom };
+  return { isLoading, needsZoom, error };
 }

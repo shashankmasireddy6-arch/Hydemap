@@ -68,21 +68,33 @@ export default function MapControls({ map }: MapControlsProps) {
     );
   }, [map, isSatellite]);
 
-  const { isLoading: isLoadingTrain, needsZoom: trainNeedsZoom } = useOverpassMarkers({
+  const {
+    isLoading: isLoadingTrain,
+    needsZoom: trainNeedsZoom,
+    error: trainError,
+  } = useOverpassMarkers({
     map,
     enabled: showTrainStations,
     fetchPlaces: fetchTrainStations,
     buildIcon: buildTrainIcon,
   });
-  const { isLoading: isLoadingBus, needsZoom: busNeedsZoom } = useOverpassMarkers({
+  const {
+    isLoading: isLoadingBus,
+    needsZoom: busNeedsZoom,
+    error: busError,
+  } = useOverpassMarkers({
     map,
     enabled: showBusStops,
     fetchPlaces: fetchBusStops,
     buildIcon: buildBusIcon,
   });
 
-  const hint =
-    (showTrainStations && trainNeedsZoom) || (showBusStops && busNeedsZoom)
+  // Error takes priority over the zoom hint — it's the more actionable of
+  // the two ("nothing will ever show up until you retry" vs. "zoom in").
+  const activeError = (showTrainStations && trainError) || (showBusStops && busError) || undefined;
+  const hint = activeError
+    ? activeError
+    : (showTrainStations && trainNeedsZoom) || (showBusStops && busNeedsZoom)
       ? "Zoom in to see stations/stops"
       : undefined;
 
@@ -137,7 +149,13 @@ export default function MapControls({ map }: MapControlsProps) {
       </div>
 
       {hint && (
-        <span className="rounded-full border border-slate-100 bg-white/95 px-3 py-1 text-[11px] font-medium text-slate-500 shadow-panel backdrop-blur-md">
+        <span
+          className={`rounded-full border px-3 py-1 text-[11px] font-medium shadow-panel backdrop-blur-md ${
+            activeError
+              ? "border-red-200 bg-red-50 text-red-700"
+              : "border-slate-100 bg-white/95 text-slate-500"
+          }`}
+        >
           {hint}
         </span>
       )}
