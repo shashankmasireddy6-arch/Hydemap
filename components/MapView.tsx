@@ -3,6 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import { Loader } from "@googlemaps/js-api-loader";
 import { LatLng, Property, getPostColor, HYDERABAD_CENTER } from "@/types/post";
+import { Comment } from "@/types/comment";
+import { addComment, fetchComments, notifyPosterOfComment } from "@/lib/commentsService";
 import { POST_TYPE_ICON_MARKUP } from "@/components/icons";
 
 // Replace with a real Google Maps API key before deploying (or set
@@ -32,9 +34,6 @@ interface MapViewProps {
   // clicked (see the container-click delegation below — popup content is
   // raw HTML, not React, so it can't take a normal onClick prop).
   onDeletePost?: (id: string) => void;
-  // Called with a property's id when its popup's "Comments" button is
-  // clicked — same delegation mechanism as onDeletePost.
-  onViewComments?: (id: string) => void;
 }
 
 const formatPrice = (value: number) => `₹${value.toLocaleString("en-IN")}`;
@@ -100,12 +99,89 @@ function buildDetailRows(property: Property): string {
     .join("");
 }
 
+const formatCommentDate = (ms: number) =>
+  new Date(ms).toLocaleDateString("en-IN", { day: "numeric", month: "short" });
+
+// Comments + an anonymous add-comment form, embedded directly in the
+// popup (not a separate modal — a small InfoWindow is a cramped home for
+// a dynamic list + form, but that's what was asked for, so this leans on
+// the same raw-HTML + event-delegation approach as the rest of the popup
+// rather than trying to fit React in here). `comments` is undefined until
+// the first fetch resolves (see loadComments in the component below) —
+// distinct from an empty array, which means "loaded, zero comments".
+// Wrapped with data-property-id so the delegated click handler can scope
+// its input lookup to *this* popup specifically, even if more than one
+// InfoWindow happens to be open at once.
+function buildCommentsSectionHtml(
+  postId: string,
+  comments: Comment[] | undefined,
+  isLoadingComments: boolean
+): string {
+  let listMarkup: string;
+  if (isLoadingComments) {
+    listMarkup = `<p class="text-xs text-slate-400">Loading comments…</p>`;
+  } else if (!comments || comments.length === 0) {
+    listMarkup = `<p class="text-xs text-slate-400">No comments yet — be the first.</p>`;
+  } else {
+    listMarkup = `
+      <ul class="flex max-h-28 flex-col gap-1.5 overflow-y-auto">
+        ${comments
+          .map(
+            (comment) => `
+              <li class="rounded-lg bg-slate-50 p-2">
+                <div class="mb-0.5 flex items-center justify-between gap-2">
+                  <span class="truncate text-[11px] font-semibold text-slate-900">${escapeHtml(
+                    comment.commenterName
+                  )}</span>
+                  <span class="shrink-0 text-[10px] text-slate-400">${formatCommentDate(
+                    comment.createdAt
+                  )}</span>
+                </div>
+                <p class="text-xs text-slate-700">${escapeHtml(comment.commentText)}</p>
+              </li>
+            `
+          )
+          .join("")}
+      </ul>
+    `;
+  }
+
+  return `
+    <div class="comments-section mt-3 border-t border-slate-100 pt-3" data-property-id="${postId}">
+      <p class="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Comments</p>
+      ${listMarkup}
+      <div class="mt-2 flex flex-col gap-1.5">
+        <input
+          type="text"
+          class="comment-name-input w-full rounded-lg border border-slate-200 px-2 py-1.5 text-xs text-slate-800 placeholder:text-slate-400 focus:border-indigo-400 focus:outline-none"
+          placeholder="Your name"
+        />
+        <textarea
+          class="comment-text-input w-full resize-none rounded-lg border border-slate-200 px-2 py-1.5 text-xs text-slate-800 placeholder:text-slate-400 focus:border-indigo-400 focus:outline-none"
+          placeholder="Add a comment…"
+          rows="2"
+        ></textarea>
+        <button
+          type="button"
+          class="submit-comment-btn rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-indigo-500"
+          data-property-id="${postId}"
+        >Post comment</button>
+      </div>
+    </div>
+  `;
+}
+
 // Modern card-style popup: colored top accent, icon + type label (+
 // verified badge), title, price, an at-a-glance grid of every filled-in
-// detail, description, and photo thumbnails. Google's own InfoWindow
-// chrome (padding/shadow/tail/close button) is overridden in globals.css
-// so this card reads as the whole popup.
-function buildPopupHtml(property: Property, isAdmin: boolean): string {
+// detail, description, photo thumbnails, and the comments section above.
+// Google's own InfoWindow chrome (padding/shadow/tail/close button) is
+// overridden in globals.css so this card reads as the whole popup.
+function buildPopupHtml(
+  property: Property,
+  isAdmin: boolean,
+  comments: Comment[] | undefined,
+  isLoadingComments: boolean
+): string {
   const color = getPostColor(property.type);
   const title = escapeHtml(property.title);
   const priceLabel = RECURRING_TYPES.includes(property.type)
@@ -120,11 +196,7 @@ function buildPopupHtml(property: Property, isAdmin: boolean): string {
     ? `<button type="button" class="delete-post-btn mt-3 w-full rounded-lg bg-red-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-red-500" data-property-id="${property.id}">Delete post</button>`
     : "";
 
-  // Same delegation mechanism as deleteButton — opens CommentsModal
-  // (rendered by the parent) rather than anything within the popup
-  // itself, since a full comment thread + form doesn't fit a small
-  // InfoWindow.
-  const commentsButton = `<button type="button" class="view-comments-btn mt-3 w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50" data-property-id="${property.id}">💬 Comments</button>`;
+  const commentsSection = buildCommentsSectionHtml(property.id, comments, isLoadingComments);
 
   // A post with at least one uploaded photo is treated as the app's
   // lightweight "legit" signal — no verification infra needed.
@@ -169,7 +241,7 @@ function buildPopupHtml(property: Property, isAdmin: boolean): string {
         ${detailsMarkup}
         ${descriptionMarkup}
         ${photosMarkup}
-        ${commentsButton}
+        ${commentsSection}
         ${deleteButton}
       </div>
     </div>
@@ -184,7 +256,6 @@ export default function MapView({
   onMapReady,
   isAdmin = false,
   onDeletePost,
-  onViewComments,
 }: MapViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<google.maps.Map | null>(null);
@@ -200,6 +271,14 @@ export default function MapView({
   const infoWindowsRef = useRef<Map<string, google.maps.InfoWindow>>(new Map());
   const pendingMarkerRef = useRef<google.maps.Marker | null>(null);
 
+  // Per-post comments cache + in-flight tracking. Comments load lazily —
+  // the first time a post's popup opens (see loadComments below), not
+  // eagerly for every marker — and stay cached for the rest of the
+  // session once loaded. `Map.has()` distinguishes "never fetched" from
+  // "fetched, zero comments".
+  const commentsCacheRef = useRef<Map<string, Comment[]>>(new Map());
+  const loadingCommentsRef = useRef<Set<string>>(new Set());
+
   // Holds the latest callbacks/data without forcing the map-init effect
   // (which only runs once, see below) to re-run or its listeners to be
   // re-attached every render.
@@ -209,15 +288,79 @@ export default function MapView({
   onMapReadyRef.current = onMapReady;
   const onDeletePostRef = useRef(onDeletePost);
   onDeletePostRef.current = onDeletePost;
-  const onViewCommentsRef = useRef(onViewComments);
-  onViewCommentsRef.current = onViewComments;
   const isAdminRef = useRef(isAdmin);
   isAdminRef.current = isAdmin;
   const propertiesRef = useRef(properties);
   propertiesRef.current = properties;
-  // Holds the teardown for the delegated "Delete post"/"Comments" click
-  // listener, set once the map (and its container div) exist.
+  // Holds the teardown for the delegated "Delete post"/"Post comment"
+  // click listener, set once the map (and its container div) exist.
   const containerClickCleanupRef = useRef<(() => void) | null>(null);
+
+  // Re-renders a single popup's content from current state (property +
+  // isAdmin + cached comments) without touching any other marker/popup.
+  const refreshPopupContent = (property: Property) => {
+    const infoWindow = infoWindowsRef.current.get(property.id);
+    if (!infoWindow) return;
+    infoWindow.setContent(
+      buildPopupHtml(
+        property,
+        isAdminRef.current,
+        commentsCacheRef.current.get(property.id),
+        loadingCommentsRef.current.has(property.id)
+      )
+    );
+  };
+
+  // Fetches a post's comments the first time its popup opens; a no-op on
+  // later opens (cached) or while already in flight. Only reads from
+  // refs, so it stays correct even called from a listener attached back
+  // when this function had a different identity (see the marker click
+  // listener below).
+  const loadComments = async (property: Property) => {
+    if (
+      commentsCacheRef.current.has(property.id) ||
+      loadingCommentsRef.current.has(property.id)
+    ) {
+      return;
+    }
+    loadingCommentsRef.current.add(property.id);
+    refreshPopupContent(property);
+    try {
+      const comments = await fetchComments(property.id);
+      commentsCacheRef.current.set(property.id, comments);
+    } catch (err) {
+      console.error("Failed to fetch comments:", err);
+      commentsCacheRef.current.set(property.id, []);
+    } finally {
+      loadingCommentsRef.current.delete(property.id);
+      refreshPopupContent(property);
+    }
+  };
+
+  // Posts a new comment (called from the delegated click handler below),
+  // updates the cache + that popup's content immediately on success, and
+  // best-effort notifies the poster — a failed notification shouldn't
+  // undo or block the comment, which has already saved by that point.
+  const submitComment = async (property: Property, commenterName: string, commentText: string) => {
+    try {
+      const newComment = await addComment({
+        postId: property.id,
+        commenterName,
+        commentText,
+        createdAt: Date.now(),
+      });
+      const existing = commentsCacheRef.current.get(property.id) ?? [];
+      commentsCacheRef.current.set(property.id, [...existing, newComment]);
+      refreshPopupContent(property);
+      notifyPosterOfComment(property.id, commenterName, commentText);
+    } catch (err) {
+      console.error("Failed to post comment:", err);
+      window.alert("Couldn't post your comment. Try again.");
+      refreshPopupContent(property); // restore the button from its "Posting…" state
+    }
+  };
+  const submitCommentRef = useRef(submitComment);
+  submitCommentRef.current = submitComment;
 
   // Load the Maps JS API and initialize the map once on mount.
   useEffect(() => {
@@ -248,8 +391,8 @@ export default function MapView({
         });
 
         // Popup/info-window content is raw HTML (not React), so "Delete
-        // post"/"Comments" clicks are caught via delegation on the map's
-        // container rather than a per-window listener.
+        // post"/"Post comment" clicks are caught via delegation on the
+        // map's container rather than a per-window listener.
         const container = map.getDiv();
         const handleContainerClick = (e: MouseEvent) => {
           const target = e.target as HTMLElement;
@@ -261,10 +404,34 @@ export default function MapView({
             return;
           }
 
-          const commentsButton = target.closest<HTMLButtonElement>(".view-comments-btn");
-          if (commentsButton) {
-            const propertyId = commentsButton.dataset.propertyId;
-            if (propertyId) onViewCommentsRef.current?.(propertyId);
+          const commentButton = target.closest<HTMLButtonElement>(".submit-comment-btn");
+          if (commentButton) {
+            const propertyId = commentButton.dataset.propertyId;
+            if (!propertyId) return;
+
+            // Scoped to *this* popup's inputs specifically (via the
+            // comments-section wrapper's matching data-property-id), in
+            // case more than one InfoWindow happens to be open at once.
+            const section = commentButton.closest<HTMLElement>(".comments-section");
+            const nameInput = section?.querySelector<HTMLInputElement>(".comment-name-input");
+            const textInput = section?.querySelector<HTMLTextAreaElement>(".comment-text-input");
+            const commenterName = nameInput?.value.trim();
+            const commentText = textInput?.value.trim();
+
+            if (!commenterName || !commentText) {
+              window.alert("Enter your name and a comment.");
+              return;
+            }
+
+            const property = propertiesRef.current.find((p) => p.id === propertyId);
+            if (!property) return;
+
+            // Immediate feedback while the write is in flight; the full
+            // popup re-render (via submitComment -> refreshPopupContent)
+            // replaces this content entirely once it resolves either way.
+            commentButton.disabled = true;
+            commentButton.textContent = "Posting…";
+            submitCommentRef.current(property, commenterName, commentText);
           }
         };
         container.addEventListener("click", handleContainerClick);
@@ -339,11 +506,17 @@ export default function MapView({
       });
 
       const infoWindow = new google.maps.InfoWindow({
-        content: buildPopupHtml(property, isAdminRef.current),
+        content: buildPopupHtml(
+          property,
+          isAdminRef.current,
+          commentsCacheRef.current.get(property.id),
+          loadingCommentsRef.current.has(property.id)
+        ),
       });
 
       marker.addListener("click", () => {
         infoWindow.open({ map, anchor: marker });
+        loadComments(property);
       });
 
       markers.set(property.id, marker);
@@ -352,15 +525,17 @@ export default function MapView({
   }, [properties, isMapReady]);
 
   // Existing InfoWindows' content is only set once, at marker-creation
-  // time (above), so it doesn't pick up admin sign-in/out on its own —
-  // this refreshes every currently-tracked popup's content when isAdmin
+  // time (above) or when comments load/change (loadComments/submitComment
+  // above), so it doesn't pick up admin sign-in/out on its own — this
+  // refreshes every currently-tracked popup's content when isAdmin
   // changes, without touching marker positions/icons or rebuilding
   // anything.
   useEffect(() => {
     infoWindowsRef.current.forEach((infoWindow, id) => {
       const property = propertiesRef.current.find((p) => p.id === id);
-      if (property) infoWindow.setContent(buildPopupHtml(property, isAdmin));
+      if (property) refreshPopupContent(property);
     });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAdmin]);
 
   // Keep the single pending-location pin in sync: move it if the selection

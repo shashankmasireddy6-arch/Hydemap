@@ -14,7 +14,6 @@ import SearchBar from "@/components/SearchBar";
 import MapControls from "@/components/MapControls";
 import AdminAuth from "@/components/AdminAuth";
 import Toast from "@/components/Toast";
-import CommentsModal from "@/components/CommentsModal";
 import { LatLng, PostType, Property } from "@/types/post";
 import { filterProperties } from "@/lib/filterProperties";
 import { calculateNearbyAverageRent, calculateRentPaidRange } from "@/lib/rentInsights";
@@ -76,9 +75,6 @@ export default function HomePage() {
     const timeout = setTimeout(() => setToastMessage(null), 3000);
     return () => clearTimeout(timeout);
   }, [toastMessage]);
-
-  // Which post's comments panel is open, if any — see CommentsModal.
-  const [commentsPostId, setCommentsPostId] = useState<string | null>(null);
 
   // Fetch posts from Firestore once on load.
   useEffect(() => {
@@ -283,7 +279,6 @@ export default function HomePage() {
         // a delete that can't work.
         isAdmin={isAdmin && !usingDemoData}
         onDeletePost={handleDeletePost}
-        onViewComments={setCommentsPostId}
       />
 
       {/* Map controls: metro lines, train stations, bus stops, satellite toggle — top right */}
@@ -355,8 +350,6 @@ export default function HomePage() {
         onClose={handleCloseModal}
         onPickLocation={handlePickLocation}
       />
-
-      <CommentsModal postId={commentsPostId} onClose={() => setCommentsPostId(null)} />
 
       <Toast message={toastMessage} />
     </main>

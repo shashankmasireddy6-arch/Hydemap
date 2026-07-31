@@ -191,8 +191,6 @@ components/
                              toggle, and the AQI indicator
   AdminAuth.tsx              Top-left "Admin sign in" / signed-in-email pill (Google Sign-In)
   Toast.tsx                  Bottom-center self-dismissing notification (e.g. "Post deleted.")
-  CommentsModal.tsx           Per-post comment thread + anonymous add-comment form (animated
-                               modal, same pattern as CreatePostModal)
 lib/
   firebase.ts          Firebase v9 modular SDK setup — initializes the app once, exports `db`,
                         `storage`, `auth`
@@ -421,13 +419,21 @@ scripts/
   no subcollections anywhere), with `postId`, `commenterName`,
   `commentText`, `createdAt`. Anonymous — no login, matching the "without
   login" requirement — same open `allow create: if true` as posts.
-  - **A popup isn't a good place for a full comment thread + form** — the
-    map's InfoWindow is a small, raw-HTML card (see the Admin delete note
-    above for why it's raw HTML at all). So the popup only gets a
-    "💬 Comments" button (delegated click, same `.delete-post-btn`
-    mechanism), which opens `CommentsModal` — a proper animated React
-    modal (same pattern as `CreatePostModal`) — rather than trying to
-    cram a dynamic list + input form into the InfoWindow itself.
+  - **Comments live directly in the popup itself** (not a separate
+    modal) — the list plus an anonymous add-comment form are appended to
+    every popup's raw HTML (`buildCommentsSectionHtml` in `MapView.tsx`),
+    below the flat details. Since InfoWindow content is raw HTML, not
+    React, comments are fetched and posted imperatively rather than via
+    React state: `MapView` keeps a `Map<postId, Comment[]>` cache ref,
+    `loadComments()` fetches a post's comments the first time its popup
+    opens (not eagerly for every marker) and calls
+    `infoWindow.setContent(...)` to re-render just that popup once loaded,
+    and the "Post comment" button is wired through the same
+    click-delegation mechanism as the admin Delete button — the delegated
+    handler reads the sibling `<input>`/`<textarea>` values directly from
+    the DOM (scoped to that popup via a `data-property-id` wrapper, in
+    case more than one is open at once) rather than through any
+    React-bound form state.
   - **Chronological order is sorted client-side** in
     `lib/commentsService.ts#fetchComments`, not via a Firestore `orderBy`
     — combining the `where("postId", "==", ...)` equality filter with an
