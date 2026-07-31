@@ -31,5 +31,21 @@ service cloud.firestore {
       // included, so that stays true even if a client bug ever tried.
       allow delete: if false;
     }
+
+    match /comments/{commentId} {
+      // Anonymous commenting, no login — matches the "without login"
+      // requirement (see README's "Comment system" section). Notifying
+      // the post's owner happens via a separate server route
+      // (app/api/comments/notify) using the Admin SDK, which bypasses
+      // these rules entirely — it doesn't need a rule here to read the
+      // post's private `email` field.
+      allow read: if true;
+      allow create: if true;
+
+      // No edit/delete-comment feature exists yet — disallowed outright
+      // rather than left as an oversight.
+      allow update: if false;
+      allow delete: if false;
+    }
   }
 }

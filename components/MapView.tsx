@@ -32,6 +32,9 @@ interface MapViewProps {
   // clicked (see the container-click delegation below — popup content is
   // raw HTML, not React, so it can't take a normal onClick prop).
   onDeletePost?: (id: string) => void;
+  // Called with a property's id when its popup's "Comments" button is
+  // clicked — same delegation mechanism as onDeletePost.
+  onViewComments?: (id: string) => void;
 }
 
 const formatPrice = (value: number) => `₹${value.toLocaleString("en-IN")}`;
@@ -117,6 +120,12 @@ function buildPopupHtml(property: Property, isAdmin: boolean): string {
     ? `<button type="button" class="delete-post-btn mt-3 w-full rounded-lg bg-red-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-red-500" data-property-id="${property.id}">Delete post</button>`
     : "";
 
+  // Same delegation mechanism as deleteButton — opens CommentsModal
+  // (rendered by the parent) rather than anything within the popup
+  // itself, since a full comment thread + form doesn't fit a small
+  // InfoWindow.
+  const commentsButton = `<button type="button" class="view-comments-btn mt-3 w-full rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50" data-property-id="${property.id}">💬 Comments</button>`;
+
   // A post with at least one uploaded photo is treated as the app's
   // lightweight "legit" signal — no verification infra needed.
   const isVerified = !!property.photoUrls?.length;
@@ -160,6 +169,7 @@ function buildPopupHtml(property: Property, isAdmin: boolean): string {
         ${detailsMarkup}
         ${descriptionMarkup}
         ${photosMarkup}
+        ${commentsButton}
         ${deleteButton}
       </div>
     </div>
@@ -174,6 +184,7 @@ export default function MapView({
   onMapReady,
   isAdmin = false,
   onDeletePost,
+  onViewComments,
 }: MapViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<google.maps.Map | null>(null);
@@ -198,12 +209,14 @@ export default function MapView({
   onMapReadyRef.current = onMapReady;
   const onDeletePostRef = useRef(onDeletePost);
   onDeletePostRef.current = onDeletePost;
+  const onViewCommentsRef = useRef(onViewComments);
+  onViewCommentsRef.current = onViewComments;
   const isAdminRef = useRef(isAdmin);
   isAdminRef.current = isAdmin;
   const propertiesRef = useRef(properties);
   propertiesRef.current = properties;
-  // Holds the teardown for the delegated "Delete post" click listener, set
-  // once the map (and its container div) exist.
+  // Holds the teardown for the delegated "Delete post"/"Comments" click
+  // listener, set once the map (and its container div) exist.
   const containerClickCleanupRef = useRef<(() => void) | null>(null);
 
   // Load the Maps JS API and initialize the map once on mount.
@@ -235,14 +248,24 @@ export default function MapView({
         });
 
         // Popup/info-window content is raw HTML (not React), so "Delete
-        // post" clicks are caught via delegation on the map's container
-        // rather than a per-window listener.
+        // post"/"Comments" clicks are caught via delegation on the map's
+        // container rather than a per-window listener.
         const container = map.getDiv();
         const handleContainerClick = (e: MouseEvent) => {
-          const button = (e.target as HTMLElement).closest<HTMLButtonElement>(".delete-post-btn");
-          if (!button) return;
-          const propertyId = button.dataset.propertyId;
-          if (propertyId) onDeletePostRef.current?.(propertyId);
+          const target = e.target as HTMLElement;
+
+          const deleteButton = target.closest<HTMLButtonElement>(".delete-post-btn");
+          if (deleteButton) {
+            const propertyId = deleteButton.dataset.propertyId;
+            if (propertyId) onDeletePostRef.current?.(propertyId);
+            return;
+          }
+
+          const commentsButton = target.closest<HTMLButtonElement>(".view-comments-btn");
+          if (commentsButton) {
+            const propertyId = commentsButton.dataset.propertyId;
+            if (propertyId) onViewCommentsRef.current?.(propertyId);
+          }
         };
         container.addEventListener("click", handleContainerClick);
         containerClickCleanupRef.current = () =>

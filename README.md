@@ -117,6 +117,44 @@ actually stop anyone from calling Firestore directly. Setup:
 Once set up, click "Admin sign in" (top-left) and sign in with the admin
 Google account — every post's map popup then shows a "Delete post" button.
 
+### Comment notifications (Resend + Firebase Admin SDK)
+
+Anyone can comment on a post without logging in — that part needs no setup,
+it's a plain Firestore write (`allow create: if true` in `firestore.rules`,
+same as posts). Emailing the post's *owner* about a new comment is the part
+that needs setup, since it requires reading their private `email` field
+(never exposed to any client-side query) from a trusted server context:
+
+1. **Resend** (email): sign up at resend.com (free, no credit card) →
+   **API Keys** → **Create API Key**. Set `RESEND_API_KEY` in `.env.local`
+   (see `.env.local.example`) — **not** `NEXT_PUBLIC_`-prefixed, this must
+   stay server-only.
+2. **Firebase Admin SDK** (to read the owner's email server-side): Firebase
+   console → **Project Settings** → **Service Accounts** → **Generate new
+   private key** — downloads a JSON file. Paste its entire contents as one
+   line into `FIREBASE_SERVICE_ACCOUNT_KEY` in `.env.local`. This is a real
+   secret (full admin access to your Firestore data), unlike the
+   `NEXT_PUBLIC_` keys used everywhere else in this app — never commit it,
+   never prefix it `NEXT_PUBLIC_`.
+3. Add both of the above to **Vercel → Project → Settings → Environment
+   Variables** too (same as every other key in this app) and redeploy.
+
+**Important caveat**: the notify route sends from `onboarding@resend.dev`,
+Resend's no-setup-required sender address — but Resend restricts that
+address to only deliver to *your own* Resend account email, as an
+anti-abuse measure. Real posters (any other address) won't actually
+receive anything until you verify your own sending domain under **Resend →
+Domains** (adds a few DNS records) and swap the `from` address in
+`app/api/comments/notify/route.ts` accordingly. Until then, notifications
+will appear to "send" successfully (no error) but silently not arrive for
+anyone but you — this is a Resend account-level restriction, not a bug in
+the code.
+
+A missing/invalid `RESEND_API_KEY` doesn't block comments from being
+posted — the notify request just fails silently in the background (logged
+server-side, not shown to the commenter), since a failed notification
+shouldn't stop someone's comment from saving.
+
 ## Run
 
 ```bash
@@ -132,6 +170,8 @@ app/
   layout.tsx        Root layout
   page.tsx           Main screen: fetches/adds posts via Firestore, filtering, click-to-pin + modal flow
   globals.css        Tailwind + range slider styling + Google Maps InfoWindow card overrides
+  api/comments/notify/route.ts  Server route: emails a post's owner about a new comment
+                                 (Admin SDK + Resend) — see "Comment notifications" setup above
 components/
   icons.tsx            Small hand-drawn icon set (no icon-library dependency), shared
                         across markers, popups, legend, filter bar, and modal
@@ -151,11 +191,17 @@ components/
                              toggle, and the AQI indicator
   AdminAuth.tsx              Top-left "Admin sign in" / signed-in-email pill (Google Sign-In)
   Toast.tsx                  Bottom-center self-dismissing notification (e.g. "Post deleted.")
+  CommentsModal.tsx           Per-post comment thread + anonymous add-comment form (animated
+                               modal, same pattern as CreatePostModal)
 lib/
   firebase.ts          Firebase v9 modular SDK setup — initializes the app once, exports `db`,
                         `storage`, `auth`
+  firebaseAdmin.ts      Server-only Firebase Admin SDK setup (never import from a "use client"
+                         file) — backs app/api/comments/notify
   postsService.ts      Firestore reads/writes for posts: fetchPosts(), addPost(), softDeletePost();
                         uploadPostPhotos() for Storage uploads
+  commentsService.ts    Firestore reads/writes for comments: fetchComments(), addComment(),
+                        notifyPosterOfComment() (calls the API route above)
   useAuth.ts            Google Sign-In state + ADMIN_EMAIL check (see the Admin delete setup above)
   filterProperties.ts  Pure filter function (type + price range), reusable/testable
   createPostForm.ts    Create-post form state, defaults, and validation/parsing (kept out of the UI)
@@ -167,6 +213,7 @@ lib/
   useAqi.ts             Debounced fetch-on-pan hook backing the AQI control (see MapControls.tsx)
 types/
   post.ts            PostType, GenderPreference, LatLng, Property, NewProperty, colors, map center
+  comment.ts         Comment, NewComment
 data/
   properties.json    Demo/fallback property records: id, type, price, latitude, longitude, title
 firestore.rules      Firestore security rules (manual copy-paste into the console — see "Admin
@@ -368,3 +415,36 @@ scripts/
     filtered-list sync, no special-case cleanup needed) and shows a
     bottom-center toast (`components/Toast.tsx`, auto-dismisses after 3s)
     reporting success or failure.
+- **Comment system**: a top-level `comments` Firestore collection (not a
+  `posts/{id}/comments` subcollection — kept flat, matching how the rest of
+  this app's Firestore usage is a single top-level `posts` collection with
+  no subcollections anywhere), with `postId`, `commenterName`,
+  `commentText`, `createdAt`. Anonymous — no login, matching the "without
+  login" requirement — same open `allow create: if true` as posts.
+  - **A popup isn't a good place for a full comment thread + form** — the
+    map's InfoWindow is a small, raw-HTML card (see the Admin delete note
+    above for why it's raw HTML at all). So the popup only gets a
+    "💬 Comments" button (delegated click, same `.delete-post-btn`
+    mechanism), which opens `CommentsModal` — a proper animated React
+    modal (same pattern as `CreatePostModal`) — rather than trying to
+    cram a dynamic list + input form into the InfoWindow itself.
+  - **Chronological order is sorted client-side** in
+    `lib/commentsService.ts#fetchComments`, not via a Firestore `orderBy`
+    — combining the `where("postId", "==", ...)` equality filter with an
+    `orderBy` on a different field needs a composite index, and per-post
+    comment counts are small enough that sorting already-fetched docs in
+    JS is simpler than one more required Firestore index setup step.
+  - **Notifying the poster is a separate, best-effort step**
+    (`notifyPosterOfComment`, called right after `addComment` succeeds but
+    not awaited by the UI) rather than something the comment-write itself
+    depends on — a comment always saves even if the notification email
+    fails or `RESEND_API_KEY` isn't configured at all. The notify call
+    goes through `app/api/comments/notify` (a real server route, this
+    app's first) rather than a client-side email send, specifically
+    because it needs to read the post's `email` field, which is private
+    by design (`postsService.ts#toProperty` deliberately never reads it
+    into any client-visible `Property`) — only the Admin SDK, running
+    server-side with `FIREBASE_SERVICE_ACCOUNT_KEY`, can see it. See the
+    "Comment notifications" setup section above for the Resend sandbox
+    domain caveat (emails silently won't reach real posters until a
+    sending domain is verified).
