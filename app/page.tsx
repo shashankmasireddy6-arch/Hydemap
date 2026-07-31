@@ -11,6 +11,7 @@ import PickLocationBanner from "@/components/PickLocationBanner";
 import SelectedLocationBadge from "@/components/SelectedLocationBadge";
 import RentInsightsCard from "@/components/RentInsightsCard";
 import SearchBar from "@/components/SearchBar";
+import MapControls from "@/components/MapControls";
 import { LatLng, PostType, Property } from "@/types/post";
 import { filterProperties } from "@/lib/filterProperties";
 import { calculateAverageRent, calculateRentPaidRange } from "@/lib/rentInsights";
@@ -238,6 +239,11 @@ export default function HomePage() {
         pendingLocation={selectedLocation}
         onMapReady={setMap}
       />
+
+      {/* Map controls: metro lines, train stations, bus stops, satellite toggle — top right */}
+      <div className="pointer-events-none absolute right-3 top-3 z-10 sm:right-4 sm:top-4">
+        <MapControls map={map} />
+      </div>
 
       {/* Top area: search, results count, filter bar / picking banner, insights, location badge */}
       <div className="pointer-events-none absolute inset-x-0 top-0 flex flex-col items-center gap-2 p-3 sm:p-4">
