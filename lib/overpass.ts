@@ -30,9 +30,17 @@ function boundsToBbox(bounds: google.maps.LatLngBounds): string {
   return `${sw.lat()},${sw.lng()},${ne.lat()},${ne.lng()}`;
 }
 
-async function queryOverpass(query: string, signal: AbortSignal): Promise<OverpassPlace[]> {
+const RETRY_DELAY_MS = 800;
+
+async function requestOverpass(query: string, signal: AbortSignal): Promise<OverpassPlace[]> {
   const response = await fetch(OVERPASS_ENDPOINT, {
     method: "POST",
+    // fetch() defaults a plain-string body to "text/plain", but this is a
+    // data=<query> form-encoded body — some of the community-run mirrors
+    // behind overpass-api.de's DNS round-robin enforce that strictly and
+    // reject anything else with a 406 (which then shows up in the browser
+    // as a CORS failure, since error responses often skip CORS headers).
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: `data=${encodeURIComponent(query)}`,
     signal,
   });
@@ -45,6 +53,21 @@ async function queryOverpass(query: string, signal: AbortSignal): Promise<Overpa
     lat: el.lat,
     lng: el.lon,
   }));
+}
+
+// The public Overpass instance is a pool of independently-run community
+// mirrors (round-robined by DNS), which makes it noticeably flakier than a
+// single dedicated API — one retry gives a second, likely different, mirror
+// a chance before the failure surfaces to the user.
+async function queryOverpass(query: string, signal: AbortSignal): Promise<OverpassPlace[]> {
+  try {
+    return await requestOverpass(query, signal);
+  } catch (err) {
+    if ((err as Error).name === "AbortError") throw err;
+    await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
+    if (signal.aborted) throw new DOMException("Aborted", "AbortError");
+    return requestOverpass(query, signal);
+  }
 }
 
 // OSM tags railway=station for heavy-rail and most metro/subway stops
