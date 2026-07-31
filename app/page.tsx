@@ -10,6 +10,7 @@ import CreatePostModal from "@/components/CreatePostModal";
 import PickLocationBanner from "@/components/PickLocationBanner";
 import SelectedLocationBadge from "@/components/SelectedLocationBadge";
 import RentInsightsCard from "@/components/RentInsightsCard";
+import SearchBar from "@/components/SearchBar";
 import { LatLng, PostType, Property } from "@/types/post";
 import { filterProperties } from "@/lib/filterProperties";
 import { calculateAverageRent, calculateRentPaidRange } from "@/lib/rentInsights";
@@ -53,6 +54,10 @@ export default function HomePage() {
   // A location the user has tapped on the map but not yet submitted as a
   // post. Drives the pulsing temp marker and pre-fills the form.
   const [selectedLocation, setSelectedLocation] = useState<LatLng | null>(null);
+
+  // The underlying google.maps.Map instance, handed up by MapView once
+  // created — lets SearchBar drive panTo/zoom/markers directly.
+  const [map, setMap] = useState<google.maps.Map | null>(null);
 
   // Fetch posts from Firestore once on load.
   useEffect(() => {
@@ -231,10 +236,12 @@ export default function HomePage() {
         onMapClick={handleMapClick}
         isPickingLocation={isPickingLocation}
         pendingLocation={selectedLocation}
+        onMapReady={setMap}
       />
 
-      {/* Top area: results count, filter bar / picking banner, insights, location badge */}
+      {/* Top area: search, results count, filter bar / picking banner, insights, location badge */}
       <div className="pointer-events-none absolute inset-x-0 top-0 flex flex-col items-center gap-2 p-3 sm:p-4">
+        {!isPickingLocation && <SearchBar map={map} />}
         {isLoading ? (
           <div className="pointer-events-auto rounded-full border border-slate-100 bg-white/95 px-4 py-1.5 text-xs font-medium text-slate-500 shadow-panel backdrop-blur-md">
             Loading posts…

@@ -19,6 +19,10 @@ interface MapViewProps {
   // A location the user has tapped but not yet turned into a post — shown
   // as a distinct pin so it reads differently from real posts.
   pendingLocation?: LatLng | null;
+  // Fired once, right after the map instance is created — lets a sibling
+  // component (e.g. SearchBar) drive panTo/zoom/markers directly without
+  // this component needing to know anything about what uses it for.
+  onMapReady?: (map: google.maps.Map) => void;
 }
 
 const formatPrice = (value: number) => `₹${value.toLocaleString("en-IN")}`;
@@ -149,6 +153,7 @@ export default function MapView({
   onMapClick,
   isPickingLocation,
   pendingLocation,
+  onMapReady,
 }: MapViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<google.maps.Map | null>(null);
@@ -164,17 +169,26 @@ export default function MapView({
   const infoWindowsRef = useRef<Map<string, google.maps.InfoWindow>>(new Map());
   const pendingMarkerRef = useRef<google.maps.Marker | null>(null);
 
-  // Holds the latest callback without forcing the click listener to be
+  // Holds the latest callbacks without forcing the map-init effect (which
+  // only runs once, see below) to re-run or the click listener to be
   // re-attached every render.
   const onMapClickRef = useRef(onMapClick);
   onMapClickRef.current = onMapClick;
+  const onMapReadyRef = useRef(onMapReady);
+  onMapReadyRef.current = onMapReady;
 
   // Load the Maps JS API and initialize the map once on mount.
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return;
     let cancelled = false;
 
-    const loader = new Loader({ apiKey: GOOGLE_MAPS_API_KEY, version: "weekly" });
+    // "places" is needed for the location search bar's Autocomplete widget
+    // (see components/SearchBar.tsx).
+    const loader = new Loader({
+      apiKey: GOOGLE_MAPS_API_KEY,
+      version: "weekly",
+      libraries: ["places"],
+    });
 
     loader
       .load()
@@ -190,6 +204,7 @@ export default function MapView({
           clickableIcons: false,
         });
         mapRef.current = map;
+        onMapReadyRef.current?.(map);
 
         map.addListener("click", (e: google.maps.MapMouseEvent) => {
           if (!e.latLng) return;
