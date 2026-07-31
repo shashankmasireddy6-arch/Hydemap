@@ -23,6 +23,15 @@ interface MapViewProps {
   // component (e.g. SearchBar) drive panTo/zoom/markers directly without
   // this component needing to know anything about what uses it for.
   onMapReady?: (map: google.maps.Map) => void;
+  // Whether to show a "Delete post" button in each popup. Purely cosmetic
+  // gating — the real enforcement is the Firestore security rules (see
+  // firestore.rules); this just avoids showing a button that would fail
+  // for anyone who isn't the admin.
+  isAdmin?: boolean;
+  // Called with a property's id when its popup's "Delete post" button is
+  // clicked (see the container-click delegation below — popup content is
+  // raw HTML, not React, so it can't take a normal onClick prop).
+  onDeletePost?: (id: string) => void;
 }
 
 const formatPrice = (value: number) => `₹${value.toLocaleString("en-IN")}`;
@@ -93,12 +102,20 @@ function buildDetailRows(property: Property): string {
 // detail, description, and photo thumbnails. Google's own InfoWindow
 // chrome (padding/shadow/tail/close button) is overridden in globals.css
 // so this card reads as the whole popup.
-function buildPopupHtml(property: Property): string {
+function buildPopupHtml(property: Property, isAdmin: boolean): string {
   const color = getPostColor(property.type);
   const title = escapeHtml(property.title);
   const priceLabel = RECURRING_TYPES.includes(property.type)
     ? `${formatPrice(property.price)}/mo`
     : formatPrice(property.price);
+
+  // Admin-only, cosmetic gating — see the isAdmin prop doc on MapViewProps
+  // for why this isn't the real security boundary. Clicks are caught via
+  // delegation on the map container (see handleContainerClick below),
+  // since InfoWindow content is raw HTML rather than React.
+  const deleteButton = isAdmin
+    ? `<button type="button" class="delete-post-btn mt-3 w-full rounded-lg bg-red-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-red-500" data-property-id="${property.id}">Delete post</button>`
+    : "";
 
   // A post with at least one uploaded photo is treated as the app's
   // lightweight "legit" signal — no verification infra needed.
@@ -143,6 +160,7 @@ function buildPopupHtml(property: Property): string {
         ${detailsMarkup}
         ${descriptionMarkup}
         ${photosMarkup}
+        ${deleteButton}
       </div>
     </div>
   `;
@@ -154,6 +172,8 @@ export default function MapView({
   isPickingLocation,
   pendingLocation,
   onMapReady,
+  isAdmin = false,
+  onDeletePost,
 }: MapViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<google.maps.Map | null>(null);
@@ -169,13 +189,22 @@ export default function MapView({
   const infoWindowsRef = useRef<Map<string, google.maps.InfoWindow>>(new Map());
   const pendingMarkerRef = useRef<google.maps.Marker | null>(null);
 
-  // Holds the latest callbacks without forcing the map-init effect (which
-  // only runs once, see below) to re-run or the click listener to be
+  // Holds the latest callbacks/data without forcing the map-init effect
+  // (which only runs once, see below) to re-run or its listeners to be
   // re-attached every render.
   const onMapClickRef = useRef(onMapClick);
   onMapClickRef.current = onMapClick;
   const onMapReadyRef = useRef(onMapReady);
   onMapReadyRef.current = onMapReady;
+  const onDeletePostRef = useRef(onDeletePost);
+  onDeletePostRef.current = onDeletePost;
+  const isAdminRef = useRef(isAdmin);
+  isAdminRef.current = isAdmin;
+  const propertiesRef = useRef(properties);
+  propertiesRef.current = properties;
+  // Holds the teardown for the delegated "Delete post" click listener, set
+  // once the map (and its container div) exist.
+  const containerClickCleanupRef = useRef<(() => void) | null>(null);
 
   // Load the Maps JS API and initialize the map once on mount.
   useEffect(() => {
@@ -205,6 +234,20 @@ export default function MapView({
           onMapClickRef.current?.(e.latLng.lng(), e.latLng.lat());
         });
 
+        // Popup/info-window content is raw HTML (not React), so "Delete
+        // post" clicks are caught via delegation on the map's container
+        // rather than a per-window listener.
+        const container = map.getDiv();
+        const handleContainerClick = (e: MouseEvent) => {
+          const button = (e.target as HTMLElement).closest<HTMLButtonElement>(".delete-post-btn");
+          if (!button) return;
+          const propertyId = button.dataset.propertyId;
+          if (propertyId) onDeletePostRef.current?.(propertyId);
+        };
+        container.addEventListener("click", handleContainerClick);
+        containerClickCleanupRef.current = () =>
+          container.removeEventListener("click", handleContainerClick);
+
         setIsMapReady(true);
       })
       .catch((err) => {
@@ -213,6 +256,7 @@ export default function MapView({
 
     return () => {
       cancelled = true;
+      containerClickCleanupRef.current?.();
       markersRef.current.forEach((marker) => marker.setMap(null));
       markersRef.current.clear();
       infoWindowsRef.current.forEach((infoWindow) => infoWindow.close());
@@ -272,7 +316,7 @@ export default function MapView({
       });
 
       const infoWindow = new google.maps.InfoWindow({
-        content: buildPopupHtml(property),
+        content: buildPopupHtml(property, isAdminRef.current),
       });
 
       marker.addListener("click", () => {
@@ -283,6 +327,18 @@ export default function MapView({
       infoWindows.set(property.id, infoWindow);
     });
   }, [properties, isMapReady]);
+
+  // Existing InfoWindows' content is only set once, at marker-creation
+  // time (above), so it doesn't pick up admin sign-in/out on its own —
+  // this refreshes every currently-tracked popup's content when isAdmin
+  // changes, without touching marker positions/icons or rebuilding
+  // anything.
+  useEffect(() => {
+    infoWindowsRef.current.forEach((infoWindow, id) => {
+      const property = propertiesRef.current.find((p) => p.id === id);
+      if (property) infoWindow.setContent(buildPopupHtml(property, isAdmin));
+    });
+  }, [isAdmin]);
 
   // Keep the single pending-location pin in sync: move it if the selection
   // changes, create it on first selection, remove it once cleared.

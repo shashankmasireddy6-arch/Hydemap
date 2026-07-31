@@ -12,16 +12,19 @@ import SelectedLocationBadge from "@/components/SelectedLocationBadge";
 import RentInsightsCard from "@/components/RentInsightsCard";
 import SearchBar from "@/components/SearchBar";
 import MapControls from "@/components/MapControls";
+import AdminAuth from "@/components/AdminAuth";
+import Toast from "@/components/Toast";
 import { LatLng, PostType, Property } from "@/types/post";
 import { filterProperties } from "@/lib/filterProperties";
 import { calculateNearbyAverageRent, calculateRentPaidRange } from "@/lib/rentInsights";
 import { useMapCenter } from "@/lib/useMapCenter";
+import { useAuth } from "@/lib/useAuth";
 import {
   buildPropertyFromForm,
   CreatePostFormState,
   DEFAULT_CREATE_POST_FORM,
 } from "@/lib/createPostForm";
-import { fetchPosts, addPost, uploadPostPhotos } from "@/lib/postsService";
+import { fetchPosts, addPost, uploadPostPhotos, softDeletePost } from "@/lib/postsService";
 import { isFirebaseConfigured } from "@/lib/firebase";
 import demoPropertiesData from "@/data/properties.json";
 
@@ -62,6 +65,16 @@ export default function HomePage() {
   const [map, setMap] = useState<google.maps.Map | null>(null);
   // Debounced on pan/zoom — drives the "nearby" average-rent radius below.
   const mapCenter = useMapCenter(map);
+
+  const { isAdmin } = useAuth();
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  // Auto-dismiss whatever toast is currently showing.
+  useEffect(() => {
+    if (!toastMessage) return;
+    const timeout = setTimeout(() => setToastMessage(null), 3000);
+    return () => clearTimeout(timeout);
+  }, [toastMessage]);
 
   // Fetch posts from Firestore once on load.
   useEffect(() => {
@@ -176,6 +189,23 @@ export default function HomePage() {
 
   const handleClearSelectedLocation = () => setSelectedLocation(null);
 
+  // Admin-only (see MapView's isAdmin prop) — soft-deletes a post after
+  // confirmation. The actual permission check happens in Firestore
+  // security rules (firestore.rules), not here; this just calls the
+  // update and reflects the result locally.
+  const handleDeletePost = async (postId: string) => {
+    if (!window.confirm("Are you sure you want to delete this post?")) return;
+
+    try {
+      await softDeletePost(postId);
+      setPosts((prev) => prev.filter((p) => p.id !== postId));
+      setToastMessage("Post deleted.");
+    } catch (err) {
+      console.error("Failed to delete post:", err);
+      setToastMessage("Couldn't delete the post. Try again.");
+    }
+  };
+
   const handleCloseModal = () => {
     if (isSubmitting) return;
     setIsModalOpen(false);
@@ -244,11 +274,21 @@ export default function HomePage() {
         isPickingLocation={isPickingLocation}
         pendingLocation={selectedLocation}
         onMapReady={setMap}
+        // Demo-mode posts aren't real Firestore documents, so softDeletePost
+        // would just fail against them — hide the button rather than offer
+        // a delete that can't work.
+        isAdmin={isAdmin && !usingDemoData}
+        onDeletePost={handleDeletePost}
       />
 
       {/* Map controls: metro lines, train stations, bus stops, satellite toggle — top right */}
       <div className="pointer-events-none absolute right-3 top-3 z-10 sm:right-4 sm:top-4">
         <MapControls map={map} />
+      </div>
+
+      {/* Admin sign-in, top left */}
+      <div className="pointer-events-none absolute left-3 top-3 z-10 sm:left-4 sm:top-4">
+        <AdminAuth />
       </div>
 
       {/* Top area: search, results count, filter bar / picking banner, insights, location badge */}
@@ -310,6 +350,8 @@ export default function HomePage() {
         onClose={handleCloseModal}
         onPickLocation={handlePickLocation}
       />
+
+      <Toast message={toastMessage} />
     </main>
   );
 }

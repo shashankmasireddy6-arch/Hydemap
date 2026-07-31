@@ -1,8 +1,10 @@
 import {
   collection,
   addDoc,
+  doc,
   getDocs,
   query,
+  updateDoc,
   where,
   Timestamp,
   DocumentData,
@@ -37,15 +39,22 @@ function toProperty(id: string, data: DocumentData): Property {
     squareFootage: data.squareFootage,
     description: data.description,
     photoUrls: data.photoUrls,
+    status: data.status,
     // `email` is intentionally never read here — it's write-only, so it
     // never reaches other users through the app.
   };
 }
 
 /**
- * Fetches every active (non-expired) post from Firestore. Called once on
- * load. Posts whose expiresAt has passed are excluded by the query itself
- * rather than filtered client-side.
+ * Fetches every active (non-expired, non-deleted) post from Firestore.
+ * Called once on load. Posts whose expiresAt has passed are excluded by
+ * the query itself; soft-deleted posts (status === "deleted", see
+ * softDeletePost below) are filtered client-side rather than via a second
+ * `where` clause — documents written before the `status` field existed
+ * have no value for it at all, and a `where("status", "==", "active")`
+ * query would silently exclude all of them. Filtering `!== "deleted"`
+ * client-side treats "missing" the same as "active", matching how
+ * `Property.status` is already documented as optional.
  */
 export async function fetchPosts(): Promise<Property[]> {
   const activePosts = query(
@@ -53,7 +62,9 @@ export async function fetchPosts(): Promise<Property[]> {
     where("expiresAt", ">", Timestamp.now())
   );
   const snapshot = await getDocs(activePosts);
-  return snapshot.docs.map((doc) => toProperty(doc.id, doc.data()));
+  return snapshot.docs
+    .map((docSnapshot) => toProperty(docSnapshot.id, docSnapshot.data()))
+    .filter((property) => property.status !== "deleted");
 }
 
 /**
@@ -76,6 +87,20 @@ export async function addPost(data: NewProperty): Promise<Property> {
 
   const docRef = await addDoc(collection(db, POSTS_COLLECTION), payload);
   return { id: docRef.id, ...publicData };
+}
+
+/**
+ * Soft-deletes a post: sets status to "deleted" via updateDoc rather than
+ * removing the document (deleteDoc is never used — see the "Do NOT
+ * permanently delete" requirement this implements). Firestore security
+ * rules restrict this update to the admin account (see firestore.rules);
+ * this function has no client-side admin check of its own, since a
+ * client-side check can't actually enforce anything — the rules are the
+ * real gate, this is just the call site the UI uses once the rules allow
+ * it.
+ */
+export async function softDeletePost(postId: string): Promise<void> {
+  await updateDoc(doc(db, POSTS_COLLECTION, postId), { status: "deleted" });
 }
 
 /**

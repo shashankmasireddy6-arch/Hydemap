@@ -1,0 +1,35 @@
+rules_version = '2';
+
+// Not auto-deployed — this project doesn't use the Firebase CLI. Copy this
+// into Firebase Console > Firestore Database > Rules and click Publish.
+// See README.md "Admin delete (Firebase Auth + security rules)" for the
+// full setup, including enabling Google Sign-In and authorizing your
+// deployed domain.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /posts/{postId} {
+      // Anyone can browse listings and create a post — matches the app's
+      // existing anonymous-posting model (see README's Firestore setup
+      // section), unchanged by this feature.
+      allow read: if true;
+      allow create: if true;
+
+      // Only the admin account can update a post — today that means only
+      // soft-deleting one (status -> "deleted"), since nothing else in the
+      // app updates posts, but this intentionally isn't scoped to just the
+      // `status` field: there's no other legitimate writer to distinguish
+      // it from.
+      //
+      // IMPORTANT: keep this email in sync with ADMIN_EMAIL in
+      // lib/useAuth.ts by hand — rules are a static file and can't import
+      // from the app's TypeScript.
+      allow update: if request.auth != null
+                    && request.auth.token.email == 'operations@vectorsol.in';
+
+      // Hard delete is never used — see lib/postsService.ts#softDeletePost,
+      // which only ever calls updateDoc. Disallowed outright, admin
+      // included, so that stays true even if a client bug ever tried.
+      allow delete: if false;
+    }
+  }
+}

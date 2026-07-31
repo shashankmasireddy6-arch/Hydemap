@@ -92,6 +92,31 @@ The "AQI" map control fetches real air-quality readings from
 Without a token, toggling AQI on shows an inline error explaining that
 `NEXT_PUBLIC_WAQI_TOKEN` is missing, rather than failing silently.
 
+### Admin delete (Firebase Auth + security rules)
+
+Deleting a post (soft delete — see Notes below) is restricted to one
+hardcoded admin account via real Firebase Authentication, not just a
+client-side check — a client-side-only "is this the admin" check can't
+actually stop anyone from calling Firestore directly. Setup:
+
+1. In the Firebase console, open **Build > Authentication > Sign-in
+   method**, enable **Google** as a provider.
+2. Under **Authentication > Settings > Authorized domains**, add your
+   deployed domain (e.g. `your-app.vercel.app`) — `localhost` is already
+   authorized by default for local dev. Sign-in fails with
+   `auth/unauthorized-domain` until this is done.
+3. Open `firestore.rules` in this repo, copy its contents into **Firestore
+   Database > Rules** in the console, and click **Publish**. This project
+   doesn't use the Firebase CLI, so rules aren't deployed automatically —
+   this is a manual copy-paste step, same as Storage/Firestore setup above.
+4. The admin email is hardcoded in two places that must be kept in sync by
+   hand (rules are a static file and can't import from the app's
+   TypeScript): `ADMIN_EMAIL` in `lib/useAuth.ts` and the `request.auth.token.email`
+   check in `firestore.rules`. Currently set to `operations@vectorsol.in`.
+
+Once set up, click "Admin sign in" (top-left) and sign in with the admin
+Google account — every post's map popup then shows a "Delete post" button.
+
 ## Run
 
 ```bash
@@ -124,10 +149,14 @@ components/
                              drops a marker on a selected result
   MapControls.tsx           Floating top-right panel: Metro lines (Google TransitLayer), Satellite
                              toggle, and the AQI indicator
+  AdminAuth.tsx              Top-left "Admin sign in" / signed-in-email pill (Google Sign-In)
+  Toast.tsx                  Bottom-center self-dismissing notification (e.g. "Post deleted.")
 lib/
-  firebase.ts          Firebase v9 modular SDK setup — initializes the app once, exports `db`, `storage`
-  postsService.ts      Firestore reads/writes for posts: fetchPosts(), addPost(); uploadPostPhotos()
-                        for Storage uploads
+  firebase.ts          Firebase v9 modular SDK setup — initializes the app once, exports `db`,
+                        `storage`, `auth`
+  postsService.ts      Firestore reads/writes for posts: fetchPosts(), addPost(), softDeletePost();
+                        uploadPostPhotos() for Storage uploads
+  useAuth.ts            Google Sign-In state + ADMIN_EMAIL check (see the Admin delete setup above)
   filterProperties.ts  Pure filter function (type + price range), reusable/testable
   createPostForm.ts    Create-post form state, defaults, and validation/parsing (kept out of the UI)
   rentInsights.ts      Nearby (3km) average-rent + rent-paid-range calculations
@@ -140,6 +169,8 @@ types/
   post.ts            PostType, GenderPreference, LatLng, Property, NewProperty, colors, map center
 data/
   properties.json    Demo/fallback property records: id, type, price, latitude, longitude, title
+firestore.rules      Firestore security rules (manual copy-paste into the console — see "Admin
+                      delete" setup above; this project doesn't use the Firebase CLI)
 scripts/
   seedFirestore.mjs  One-time script to upload data/properties.json into Firestore (`npm run seed`)
 ```
@@ -302,3 +333,38 @@ scripts/
   implemented — WAQI's free tier only returns one point reading per
   request, so a smooth heatmap would mean tens of calls across a grid on
   every pan, which isn't a good fit for the free tier's rate limits.
+- **Admin delete (soft delete)**: posts are never hard-deleted —
+  `lib/postsService.ts#softDeletePost` only ever calls Firestore's
+  `updateDoc` to set `status: "deleted"`, never `deleteDoc` (the rules even
+  disallow `delete` outright, admin included, as a backstop). `fetchPosts()`
+  filters out `status === "deleted"` client-side rather than via a
+  `where("status", "==", "active")` query — documents written before this
+  field existed have no value for it at all, and that query would silently
+  exclude every one of them.
+  - **Client-side gating is cosmetic only.** `MapView`'s `isAdmin` prop
+    just decides whether a "Delete post" button renders in a popup —
+    it has zero enforcement power on its own. The actual boundary is
+    `firestore.rules`: `allow update` requires
+    `request.auth.token.email == 'operations@vectorsol.in'`, which only
+    exists because of real Firebase Authentication (Google Sign-In, see
+    `lib/useAuth.ts`) added specifically to give the rules something to
+    check. Without real sign-in, a hardcoded-email check is unenforceable
+    — anyone can call Firestore directly from the browser console
+    regardless of what the UI shows.
+  - **Popup delete button uses event delegation**, not a normal React
+    `onClick` — `MapView`'s InfoWindow content is a raw HTML string (see
+    `buildPopupHtml`), not React, so clicks on `.delete-post-btn` are
+    caught via a single listener on the map's container `div` (same
+    pattern the old, since-removed "Find matches" button used). Because
+    each InfoWindow's content is only set once, at marker-creation time,
+    a second effect in `MapView` (keyed on `isAdmin`) calls
+    `infoWindow.setContent(...)` on every currently-tracked popup when
+    the admin signs in/out, so already-open or previously-rendered popups
+    pick up the button appearing/disappearing without a full marker
+    rebuild.
+  - Deleting shows a native `window.confirm()` ("Are you sure you want to
+    delete this post?"), then removes the post from local `posts` state
+    on success (its marker disappears via `MapView`'s existing
+    filtered-list sync, no special-case cleanup needed) and shows a
+    bottom-center toast (`components/Toast.tsx`, auto-dismisses after 3s)
+    reporting success or failure.

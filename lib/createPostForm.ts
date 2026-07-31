@@ -170,6 +170,7 @@ export function buildPropertyFromForm(form: CreatePostFormState): CreatePostResu
     furnishing: form.furnishing,
     gatedSociety: form.gatedSociety,
     parking,
+    status: "active",
   };
 
   if (form.type === "Sharing") {

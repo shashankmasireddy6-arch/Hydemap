@@ -1,4 +1,5 @@
 import { initializeApp, getApps } from "firebase/app";
+import { getAuth } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
 import { getStorage } from "firebase/storage";
 
@@ -18,6 +19,12 @@ export const db = getFirestore(app);
 
 // Storage, for post photo uploads (see lib/postsService.ts).
 export const storage = getStorage(app);
+
+// Auth, for the admin sign-in gate on deleting posts (see lib/useAuth.ts).
+// Needs "Google" enabled under Build > Authentication > Sign-in method in
+// the Firebase console, plus the deployed domain added under
+// Authentication > Settings > Authorized domains.
+export const auth = getAuth(app);
 
 // Helper flag
 export const isFirebaseConfigured =

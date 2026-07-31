@@ -51,6 +51,11 @@ export interface Property {
   // Download URLs for photos uploaded to Firebase Storage. A post with at
   // least one photo is treated as "verified" in the UI.
   photoUrls?: string[];
+  // Soft-delete flag (see lib/postsService.ts#softDeletePost) — posts are
+  // never hard-deleted, just marked "deleted" and filtered out of
+  // fetchPosts(). Missing/undefined is treated as "active" for backward
+  // compatibility with documents written before this field existed.
+  status?: "active" | "deleted";
 }
 
 // Fields for a post that hasn't been saved yet — Firestore assigns the id
