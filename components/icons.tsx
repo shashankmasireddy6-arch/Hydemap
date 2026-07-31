@@ -154,10 +154,7 @@ export function LayersIcon({ className }: IconProps) {
   );
 }
 
-// Map control icons — metro/transit lines, train stations, bus stops, and
-// the satellite toggle. Raw path/shape markup for each is also exported
-// below (POI_ICON_MARKUP) for use in map marker data-URIs, same pattern as
-// POST_TYPE_ICON_MARKUP.
+// Map control icons — metro/transit lines and the satellite toggle.
 export function TransitIcon({ className }: IconProps) {
   return (
     <svg viewBox="0 0 24 24" className={className} {...strokeProps}>
@@ -167,32 +164,6 @@ export function TransitIcon({ className }: IconProps) {
         <line x1="7" y1="5" x2="7" y2="19" />
         <line x1="12" y1="5" x2="12" y2="19" />
         <line x1="17" y1="5" x2="17" y2="19" />
-      </g>
-    </svg>
-  );
-}
-
-export function TrainIcon({ className }: IconProps) {
-  return (
-    <svg viewBox="0 0 24 24" className={className} {...strokeProps}>
-      <g className={base}>
-        <rect x="6" y="4" width="12" height="13" rx="3" />
-        <line x1="6" y1="10" x2="18" y2="10" />
-        <circle cx="9" cy="19.5" r="1.3" />
-        <circle cx="15" cy="19.5" r="1.3" />
-      </g>
-    </svg>
-  );
-}
-
-export function BusIcon({ className }: IconProps) {
-  return (
-    <svg viewBox="0 0 24 24" className={className} {...strokeProps}>
-      <g className={base}>
-        <rect x="3" y="6" width="18" height="10" rx="2" />
-        <line x1="3" y1="11" x2="21" y2="11" />
-        <circle cx="7.5" cy="18.5" r="1.4" />
-        <circle cx="16.5" cy="18.5" r="1.4" />
       </g>
     </svg>
   );
@@ -208,14 +179,6 @@ export function SatelliteIcon({ className }: IconProps) {
     </svg>
   );
 }
-
-// Raw SVG inner-markup for the two POI marker types placed on the map
-// (train stations, bus stops) — used inside Google Maps' data-URI marker
-// icons, same reasoning as POST_TYPE_ICON_MARKUP.
-export const POI_ICON_MARKUP = {
-  train: `<rect x="6" y="4" width="12" height="13" rx="3" /><line x1="6" y1="10" x2="18" y2="10" /><circle cx="9" cy="19.5" r="1.3" /><circle cx="15" cy="19.5" r="1.3" />`,
-  bus: `<rect x="3" y="6" width="18" height="10" rx="2" /><line x1="3" y1="11" x2="21" y2="11" /><circle cx="7.5" cy="18.5" r="1.4" /><circle cx="16.5" cy="18.5" r="1.4" />`,
-} as const;
 
 /**
  * Single source of truth for the per-post-type icon, reused by the legend,
