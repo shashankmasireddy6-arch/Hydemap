@@ -9,15 +9,12 @@ import ResultsCount from "@/components/ResultsCount";
 import CreatePostModal from "@/components/CreatePostModal";
 import PickLocationBanner from "@/components/PickLocationBanner";
 import SelectedLocationBadge from "@/components/SelectedLocationBadge";
-import RentInsightsCard from "@/components/RentInsightsCard";
 import SearchBar from "@/components/SearchBar";
 import MapControls from "@/components/MapControls";
 import AdminAuth from "@/components/AdminAuth";
 import Toast from "@/components/Toast";
 import { LatLng, PostType, Property } from "@/types/post";
 import { filterProperties } from "@/lib/filterProperties";
-import { calculateNearbyAverageRent, calculateRentPaidRange } from "@/lib/rentInsights";
-import { useMapCenter } from "@/lib/useMapCenter";
 import { useAuth } from "@/lib/useAuth";
 import {
   buildPropertyFromForm,
@@ -63,8 +60,6 @@ export default function HomePage() {
   // The underlying google.maps.Map instance, handed up by MapView once
   // created — lets SearchBar drive panTo/zoom/markers directly.
   const [map, setMap] = useState<google.maps.Map | null>(null);
-  // Debounced on pan/zoom — drives the "nearby" average-rent radius below.
-  const mapCenter = useMapCenter(map);
 
   const { isAdmin } = useAuth();
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -119,20 +114,6 @@ export default function HomePage() {
   const filteredProperties = useMemo(
     () => filterProperties(posts, { type: selectedType, price: budget }),
     [posts, selectedType, budget]
-  );
-
-  // Average rent within 3km of the map's current center (see
-  // lib/rentInsights.ts) — still respects the active type/budget filters
-  // (filteredProperties), the distance check is on top of those, not
-  // instead of them. Recomputes as the map pans (mapCenter) or filters
-  // change.
-  const averageRent = useMemo(
-    () => calculateNearbyAverageRent(mapCenter, filteredProperties),
-    [mapCenter, filteredProperties]
-  );
-  const rentPaidRange = useMemo(
-    () => calculateRentPaidRange(filteredProperties),
-    [filteredProperties]
   );
 
   const openModalWithLocation = (location: LatLng | null) => {
@@ -318,7 +299,6 @@ export default function HomePage() {
           <>
             <ResultsCount visible={filteredProperties.length} total={posts.length} />
             {isPickingLocation && <PickLocationBanner onCancel={handleCancelPicking} />}
-            <RentInsightsCard averageRent={averageRent} rentPaidRange={rentPaidRange} />
             {usingDemoData && (
               <div className="pointer-events-auto rounded-full border border-amber-200 bg-amber-50 px-3.5 py-1.5 text-xs font-medium text-amber-800">
                 Showing demo data — add your Firebase config to save real posts (see README).
