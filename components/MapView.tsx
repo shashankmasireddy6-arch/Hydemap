@@ -315,19 +315,25 @@ export default function MapView({
   // (see lib/useClusters.ts). `results` mixes ClusterPoints (grouped
   // areas) and ListingPoints (individual posts that should render
   // normally at the current view) — see types/cluster.ts.
-  const { results: clusterResults } = useClusters(mapInstance);
+  const { results: clusterResults, error: clustersError } = useClusters(
+    mapInstance,
+    properties.length
+  );
 
   // Which property ids should render as their normal rich marker right
   // now — everything else is either grouped into a cluster circle or
-  // outside the current viewport/bounds. Empty until the first cluster
-  // fetch resolves, which briefly hides all property markers on first
-  // load — same trade-off as any other data-dependent overlay in this
-  // app (e.g. AQI), rather than flashing "every property" and then
-  // replacing it a moment later.
-  const listingIdsToShow = useMemo(
-    () => new Set(clusterResults.filter((r) => r.type === "listing").map((r) => r.id)),
-    [clusterResults]
-  );
+  // outside the current viewport/bounds. `null` means "show every
+  // property, unclustered": clustering is a display nicety layered on top
+  // of the map, not the source of truth for which posts exist, so a
+  // failed /api/clusters call (missing env var, cold start, network blip)
+  // must fail open, not hide every listing on the map. Empty (not null)
+  // until the first successful fetch resolves, which briefly hides
+  // property markers on first load — same trade-off as any other
+  // data-dependent overlay in this app (e.g. AQI).
+  const listingIdsToShow = useMemo(() => {
+    if (clustersError) return null;
+    return new Set(clusterResults.filter((r) => r.type === "listing").map((r) => r.id));
+  }, [clusterResults, clustersError]);
 
   // Per-post comments cache + in-flight tracking. Comments load lazily —
   // the first time a post's popup opens (see loadComments below), not
@@ -536,14 +542,18 @@ export default function MapView({
   // further narrowed to only the ids the cluster API says should render
   // individually right now (listingIdsToShow); anything else is grouped
   // into a cluster circle or outside the current viewport (see the
-  // clustering effect further below).
+  // clustering effect further below). listingIdsToShow === null means the
+  // cluster API is unavailable — fall back to every property so listings
+  // never silently vanish just because clustering failed.
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !isMapReady) return;
 
     const markers = markersRef.current;
     const infoWindows = infoWindowsRef.current;
-    const visibleProperties = properties.filter((p) => listingIdsToShow.has(p.id));
+    const visibleProperties = listingIdsToShow
+      ? properties.filter((p) => listingIdsToShow.has(p.id))
+      : properties;
     const nextIds = new Set(visibleProperties.map((p) => p.id));
 
     // Remove markers that are no longer in the filtered set.
@@ -603,7 +613,11 @@ export default function MapView({
     if (!map || !isMapReady) return;
 
     clusterMarkersRef.current.forEach((marker) => marker.setMap(null));
-    clusterMarkersRef.current = clusterResults
+    // On error, listingIdsToShow's fallback already renders every property
+    // individually (see above) — skip clusters entirely here rather than
+    // drawing stale circles (results isn't reset on a failed fetch) on top
+    // of/instead of those now-visible pins.
+    clusterMarkersRef.current = (clustersError ? [] : clusterResults)
       .filter((result): result is ClusterPoint => result.type === "cluster")
       .map((cluster) => {
         const { url, size } = buildClusterIconUrl(cluster.count);
@@ -635,7 +649,7 @@ export default function MapView({
 
         return marker;
       });
-  }, [clusterResults, isMapReady]);
+  }, [clusterResults, clustersError, isMapReady]);
 
   // Existing InfoWindows' content is only set once, at marker-creation
   // time (above) or when comments load/change (loadComments/submitComment
