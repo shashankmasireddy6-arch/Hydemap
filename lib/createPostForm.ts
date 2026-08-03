@@ -8,6 +8,7 @@ import {
   PetsPreference,
   PostDuration,
   PostType,
+  RECURRING_TYPES,
 } from "@/types/post";
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
@@ -74,11 +75,6 @@ export const DEFAULT_CREATE_POST_FORM: CreatePostFormState = {
   description: "",
   photos: [],
 };
-
-// Types where the amount the user enters is a recurring monthly cost
-// ("Monthly rent" field is shown); everything else collects a one-time
-// amount via the "Price" field. See CreatePostModal's `showsMonthlyRent`.
-const RECURRING_TYPES: PostType[] = ["Rent", "Sharing", "Rent Paid"];
 
 export interface CreatePostResult {
   data?: NewProperty;

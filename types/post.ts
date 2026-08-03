@@ -4,6 +4,14 @@ export type PostType =
   | "Sharing"
   | "Rent Paid";
 
+// Types whose `price` is a recurring monthly amount vs. Sale's one-time
+// amount — same recurring/one-time split used by the create-post form (to
+// label the amount field "Price" vs. "Monthly rent") and by map
+// clustering (to avoid grouping a monthly rent with a lump-sum sale price
+// into one misleading "range"). Single source of truth so both stay in
+// sync if a future post type is added.
+export const RECURRING_TYPES: PostType[] = ["Rent", "Sharing", "Rent Paid"];
+
 export type GenderPreference = "Male" | "Female" | "Any";
 
 export type BHK = "1" | "2" | "3" | "4" | "5+";

@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Loader } from "@googlemaps/js-api-loader";
-import { LatLng, Property, getPostColor, HYDERABAD_CENTER } from "@/types/post";
+import { LatLng, Property, getPostColor, HYDERABAD_CENTER, RECURRING_TYPES } from "@/types/post";
 import { Comment } from "@/types/comment";
 import { addComment, fetchComments, notifyPosterOfComment } from "@/lib/commentsService";
 import { useClusters } from "@/lib/useClusters";
@@ -54,11 +54,6 @@ const escapeHtml = (value: string) =>
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
-
-// Types that carry a recurring monthly amount (see buildPropertyFromForm,
-// which folds the user's input into `price` either way) vs. a one-time
-// amount, purely to label the price line correctly.
-const RECURRING_TYPES: Property["type"][] = ["Rent", "Sharing", "Rent Paid"];
 
 function buildDetailRows(property: Property): string {
   const rows: [string, string | undefined][] = [

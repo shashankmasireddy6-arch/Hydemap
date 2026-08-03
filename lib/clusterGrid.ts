@@ -1,4 +1,5 @@
 import { ClusterResult, MapBounds } from "@/types/cluster";
+import { PostType, RECURRING_TYPES } from "@/types/post";
 
 export type ClusterTier = "cluster" | "price-range" | "listing";
 
@@ -15,13 +16,25 @@ export function getClusterTier(zoom: number): ClusterTier {
 // Grid cell size in degrees for bucketing *within* a tier — shrinks as you
 // zoom in so clusters/price-range groups stay a reasonable on-screen size,
 // bottoming out at "listing" (0 = no bucketing, every point is its own
-// marker).
+// marker). ~0.01° is roughly 1.1km at this app's latitude (111km/degree
+// for lat, ~106km/degree for lng at Hyderabad's ~17.4°N — close enough to
+// treat as one number, same approximation the original version used).
+//
+// Tuned so cells never shrink below ~3.9km while still inside the
+// "cluster"/"price-range" tiers: at the default city-wide view (zoom 11,
+// viewport ~85km across), a 2.2km cell (the original size here) meant two
+// listings even 3-4km apart never landed in the same bucket, so most of
+// this app's sparse (~10) listings rendered as scattered individual chips
+// instead of a rent-range pill — clustering only ever visibly kicked in
+// once zoomed out to city/region scale (zoom <= 10). Individual chips are
+// reserved for the "listing" tier (zoom > 15, viewport ≲ 3-5km) below —
+// anything wider than that should now show *some* grouped marker.
 export function getGridSize(zoom: number): number {
   if (getClusterTier(zoom) === "listing") return 0;
-  if (zoom <= 8) return 0.1;
-  if (zoom <= 10) return 0.05;
-  if (zoom <= 13) return 0.02;
-  return 0.01; // 14–15
+  if (zoom <= 8) return 0.2; // ~22km — cluster tier, city/large-area view
+  if (zoom <= 10) return 0.12; // ~13km — cluster tier
+  if (zoom <= 13) return 0.06; // ~6.6km — price-range tier, upper end
+  return 0.035; // 14–15, ~3.9km — price-range tier's most-zoomed-in edge
 }
 
 export interface ClusterableItem {
@@ -29,6 +42,7 @@ export interface ClusterableItem {
   lat: number;
   lng: number;
   rent: number;
+  type: PostType;
 }
 
 /**
@@ -62,10 +76,19 @@ export function clusterItems(
 
   for (const item of items) {
     // FLOOR(lat / gridSize), FLOOR(lng / gridSize) — identical to the
-    // spec's SQL bucket keys.
+    // spec's SQL bucket keys. The "price-range" tier additionally splits
+    // by whether `rent` is a recurring monthly figure (Rent/Sharing/Rent
+    // Paid) or a one-time Sale price — grouping those together produced
+    // misleading ranges like "₹11,000 – ₹20.0L" (a monthly rent mixed
+    // with a lump-sum sale price). The "cluster" tier only ever shows a
+    // bare count, never a price, so it's intentionally *not* split this
+    // way — doing so would just fragment bubbles at low zoom for no
+    // visible benefit, since no price is displayed there at all.
     const latBucket = Math.floor(item.lat / gridSize);
     const lngBucket = Math.floor(item.lng / gridSize);
-    const key = `${latBucket}:${lngBucket}`;
+    const priceCategory = RECURRING_TYPES.includes(item.type) ? "recurring" : "one-time";
+    const key =
+      tier === "price-range" ? `${latBucket}:${lngBucket}:${priceCategory}` : `${latBucket}:${lngBucket}`;
 
     const bucket = buckets.get(key) ?? {
       latSum: 0,
