@@ -139,6 +139,12 @@ that needs setup, since it requires reading their private `email` field
 3. Add both of the above to **Vercel → Project → Settings → Environment
    Variables** too (same as every other key in this app) and redeploy.
 
+`FIREBASE_SERVICE_ACCOUNT_KEY` is also required for the map clustering
+feature (`app/api/clusters`) — see "Map clustering" in Notes below for why
+a read-only, public-data route still needs the Admin SDK. If you've
+already set it up for comment notifications, clustering works with no
+extra setup.
+
 **Important caveat**: the notify route sends from `onboarding@resend.dev`,
 Resend's no-setup-required sender address — but Resend restricts that
 address to only deliver to *your own* Resend account email, as an
@@ -172,6 +178,9 @@ app/
   globals.css        Tailwind + range slider styling + Google Maps InfoWindow card overrides
   api/comments/notify/route.ts  Server route: emails a post's owner about a new comment
                                  (Admin SDK + Resend) — see "Comment notifications" setup above
+  api/clusters/route.ts  Server route: grid-clusters visible posts for the current map
+                          bounds/zoom (Admin SDK + in-memory TTL cache) — see "Map clustering"
+                          in Notes below
 components/
   icons.tsx            Small hand-drawn icon set (no icon-library dependency), shared
                         across markers, popups, legend, filter bar, and modal
@@ -195,11 +204,22 @@ lib/
   firebase.ts          Firebase v9 modular SDK setup — initializes the app once, exports `db`,
                         `storage`, `auth`
   firebaseAdmin.ts      Server-only Firebase Admin SDK setup (never import from a "use client"
-                         file) — backs app/api/comments/notify
+                         file) — backs app/api/comments/notify and app/api/clusters
+  adminPostsService.ts   Server-only, Admin-SDK counterpart to postsService.ts's fetchPosts(),
+                          for routes where the client SDK doesn't work at all (see "Map
+                          clustering" in Notes) — pulls only id/lat/lng, all clustering needs
   postsService.ts      Firestore reads/writes for posts: fetchPosts(), addPost(), softDeletePost();
                         uploadPostPhotos() for Storage uploads
   commentsService.ts    Firestore reads/writes for comments: fetchComments(), addComment(),
                         notifyPosterOfComment() (calls the API route above)
+  clusterGrid.ts         Pure grid-clustering logic: getGridSize(zoom), clusterItems(),
+                          isWithinBounds() — the JS equivalent of a SQL GROUP BY, since
+                          Firestore has no native aggregation (backs app/api/clusters)
+  useClusters.ts          Debounced (300ms) fetch-on-pan/zoom hook backing map clustering;
+                          same coalesce-in-flight pattern as useAqi.ts (see below)
+  smoothZoom.ts           smoothZoomTo(map, targetZoom) — steps zoom by 1 every 120ms, since
+                          Maps JS has no native zoom-tween; shared by SearchBar and cluster
+                          click-to-zoom
   useAuth.ts            Google Sign-In state + ADMIN_EMAIL check (see the Admin delete setup above)
   filterProperties.ts  Pure filter function (type + price range), reusable/testable
   createPostForm.ts    Create-post form state, defaults, and validation/parsing (kept out of the UI)
@@ -212,6 +232,7 @@ lib/
 types/
   post.ts            PostType, GenderPreference, LatLng, Property, NewProperty, colors, map center
   comment.ts         Comment, NewComment
+  cluster.ts         ClusterPoint, ListingPoint, ClusterResult, MapBounds
 data/
   properties.json    Demo/fallback property records: id, type, price, latitude, longitude, title
 firestore.rules      Firestore security rules (manual copy-paste into the console — see "Admin
@@ -454,3 +475,90 @@ scripts/
     "Comment notifications" setup section above for the Resend sandbox
     domain caveat (emails silently won't reach real posters until a
     sending domain is verified).
+- **Map clustering**: at low zoom, markers are grouped into numbered circle
+  clusters instead of rendering one pin per post; clicking a cluster zooms
+  and re-centers on it, breaking it into smaller clusters or individual
+  pins.
+  - **Server-side aggregation**, not a client-side clustering library:
+    `GET /api/clusters?north=&south=&east=&west=&zoom=` (`app/api/clusters`)
+    fetches every active post's `id`/`lat`/`lng` via
+    `lib/adminPostsService.ts`, filters to the requested bounds, buckets
+    into a lat/lng grid (`lib/clusterGrid.ts#clusterItems`, the JS
+    equivalent of the classic `GROUP BY FLOOR(lat/gridSize), FLOOR(lng/gridSize)`
+    approach — Firestore has no native aggregation), and returns one entry
+    per bucket: `{ type: "cluster", lat, lng, count }` for buckets with 2+
+    posts (centroid = average lat/lng), or `{ type: "listing", lat, lng, id }`
+    unchanged for a bucket with exactly one. Grid size steps down with zoom
+    (`getGridSize`: 0.05 → 0.02 → 0.01 → individual pins past zoom 16),
+    matching the original spec exactly.
+  - **Why the Admin SDK, not the client SDK**, even though clustering only
+    ever touches public data: the client Firestore SDK's gRPC transport
+    doesn't work inside a Next.js Route Handler at all — it fails at
+    runtime with `13 INTERNAL: message.copy is not a function`, discovered
+    while building this feature (first tried the plain client SDK, got
+    silent empty results, then found this in the server log). `getAdminDb()`
+    (`lib/firebaseAdmin.ts`) sidesteps it entirely, since the Admin SDK is
+    built for Node server contexts from the ground up — see that file's
+    top comment for the full story. Any future server-side Firestore read
+    should go through the Admin SDK for this reason alone, independent of
+    whether the data needs elevated permissions.
+  - **This app's real listing count (~10) is nowhere near the spec's
+    10,000+ target.** At that volume, `fetchActiveListingPointsAdmin()`
+    fetching the *entire* `posts` collection on every cache miss (rather
+    than a bounds-filtered Firestore query) is deliberately the simple
+    option: Firestore can't do an independent range filter on both `lat`
+    and `lng` in one query without geohashing infrastructure (e.g.
+    `geofirestore`), which isn't worth adding yet. If listing volume ever
+    grows enough that this becomes the bottleneck, that's the point to add
+    geohash-indexed queries so filtering happens server-side before
+    aggregation, not after.
+  - **Caching**: an in-memory `Map`, keyed on bounds (rounded to 3 decimals
+    — about 100m, so sub-pixel pan differences share a cache entry) plus
+    zoom, TTL 45s (within the specced 30–60s window). Explicitly
+    opportunistic, not a guarantee, since this runs as a Next.js Route
+    Handler on Vercel rather than a long-lived Express process — a warm
+    serverless instance does get reused for bursts of nearby requests, but
+    nothing guarantees the same instance (and therefore this module-level
+    `Map`) survives between any two given requests. Swap for Vercel
+    KV/Redis if that guarantee ever starts to matter.
+  - **Frontend**: `lib/useClusters.ts` listens for `bounds_changed` and
+    `zoom_changed`, debounces 300ms, and fetches `/api/clusters` — reusing
+    the same coalesce-in-flight-requests pattern as `lib/useAqi.ts`
+    (finish the current fetch, then run once more with the latest
+    bounds/zoom, rather than aborting and restarting on every event),
+    since that pattern was what fixed a real livelock found earlier on the
+    train/bus map controls under rapid pan/zoom. `MapView.tsx` renders
+    cluster results as colored circle markers (density-based color:
+    indigo-300 for ≤5, indigo-600 for ≤20, rose-600 above that; radius
+    grows with count too) built as inline SVG data URIs, the same
+    technique `buildMarkerIconUrl` already uses for property pins.
+    Individual posts are viewport-culled to exactly the `listing` ids the
+    API returned (`listingIdsToShow`), instead of always rendering every
+    fetched post, so a post outside the clustering response's bucket
+    resolution never double-renders as both part of a cluster and its own
+    pin. Cluster markers are fully cleared and rebuilt on every
+    `clusterResults` change (simpler than diffing, and cluster counts
+    change on essentially every pan/zoom anyway, unlike property markers
+    which mostly don't).
+  - **Click-to-zoom**: a cluster's `click` listener pans to its centroid
+    and zooms in by 2 levels (capped at 18) via `lib/smoothZoom.ts`'s
+    `smoothZoomTo` — extracted from `SearchBar.tsx`, which already had the
+    same "step zoom by 1 every 120ms" workaround for Maps JS having no
+    native zoom-tween. The `bounds_changed`/`zoom_changed` listeners then
+    naturally trigger a re-fetch at the new zoom, same as any other
+    pan/zoom.
+  - **Hover tooltip**: each cluster marker's native `title` attribute reads
+    "N flats" — the classic `google.maps.Marker` API's only built-in hover
+    affordance; a custom HTML tooltip would need `AdvancedMarkerElement`
+    (which needs a Map ID set up in Google Cloud), the same trade-off
+    already noted for property markers' hover/pulse effects above.
+  - **Tested against this app's real (~10-listing) Firestore data**: at
+    city-level zoom, clusters and individual pins render correctly
+    side-by-side; clicking a cluster zooms in and correctly re-clusters at
+    the new zoom; the fixed zoom-band grid sizes (0.05° even at zoom 5,
+    matching the spec) mean that zooming out to whole-country scale
+    visually collapses Hyderabad's ~10 posts into what looks like one or
+    two markers, since they're only ~30km apart and the grid doesn't
+    shrink further past zoom ≤10 — expected given the fixed-band approach
+    the spec asked for, and not a scenario a single-city app's map would
+    realistically be zoomed to anyway.

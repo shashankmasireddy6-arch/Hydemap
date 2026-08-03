@@ -1,10 +1,13 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Loader } from "@googlemaps/js-api-loader";
 import { LatLng, Property, getPostColor, HYDERABAD_CENTER } from "@/types/post";
 import { Comment } from "@/types/comment";
 import { addComment, fetchComments, notifyPosterOfComment } from "@/lib/commentsService";
+import { useClusters } from "@/lib/useClusters";
+import { ClusterPoint } from "@/types/cluster";
+import { smoothZoomTo } from "@/lib/smoothZoom";
 import { POST_TYPE_ICON_MARKUP } from "@/components/icons";
 
 // Replace with a real Google Maps API key before deploying (or set
@@ -61,6 +64,34 @@ function buildMarkerIconUrl(property: Property): string {
     </svg>
   `.trim();
   return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
+}
+
+// Density-based coloring (bonus): cool/light for small clusters, warmer
+// and more saturated as the count climbs, so density reads at a glance
+// without needing to actually read the number.
+function getClusterColor(count: number): string {
+  if (count <= 5) return "#818cf8"; // indigo-400
+  if (count <= 20) return "#4f46e5"; // indigo-600
+  return "#e11d48"; // rose-600 — noticeably "hot" for a dense area
+}
+
+// Same data-URI SVG technique as buildMarkerIconUrl — a colored circle,
+// sized up slightly for bigger clusters, with the count centered inside.
+// Google's classic Marker can't render arbitrary styled HTML as an icon,
+// only an image, hence generating one on the fly per cluster.
+function buildClusterIconUrl(count: number): { url: string; size: number } {
+  const color = getClusterColor(count);
+  const size = count <= 5 ? 34 : count <= 20 ? 40 : 46;
+  const half = size / 2;
+  const fontSize = count >= 100 ? 12 : 13;
+  const svg = `
+    <svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">
+      <circle cx="${half}" cy="${half}" r="${half - 1.5}" fill="${color}" stroke="white" stroke-width="2.5" />
+      <text x="${half}" y="${half}" text-anchor="middle" dominant-baseline="central"
+            font-family="system-ui, sans-serif" font-size="${fontSize}" font-weight="700" fill="white">${count}</text>
+    </svg>
+  `.trim();
+  return { url: `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`, size };
 }
 
 // Types that carry a recurring monthly amount (see buildPropertyFromForm,
@@ -263,6 +294,9 @@ export default function MapView({
   // exists, so the other effects (which all depend on mapRef.current)
   // know to (re)run instead of silently no-oping on first mount.
   const [isMapReady, setIsMapReady] = useState(false);
+  // Same map instance as mapRef, but as state — needed so useClusters
+  // (a hook, which can't read a ref reactively) knows once it exists.
+  const [mapInstance, setMapInstance] = useState<google.maps.Map | null>(null);
 
   // Keyed by property id so filter changes only add/remove the markers
   // that actually entered or left the result set, instead of rebuilding
@@ -270,6 +304,30 @@ export default function MapView({
   const markersRef = useRef<Map<string, google.maps.Marker>>(new Map());
   const infoWindowsRef = useRef<Map<string, google.maps.InfoWindow>>(new Map());
   const pendingMarkerRef = useRef<google.maps.Marker | null>(null);
+  // Cluster-circle markers are ephemeral and rebuilt wholesale on every
+  // cluster-result change (see the clustering effect below) rather than
+  // diffed like property markers — there's no per-cluster state (like an
+  // open popup) worth preserving across a rebuild the way there is for a
+  // property's InfoWindow.
+  const clusterMarkersRef = useRef<google.maps.Marker[]>([]);
+
+  // Clustering: fetches /api/clusters, debounced on bounds/zoom changes
+  // (see lib/useClusters.ts). `results` mixes ClusterPoints (grouped
+  // areas) and ListingPoints (individual posts that should render
+  // normally at the current view) — see types/cluster.ts.
+  const { results: clusterResults } = useClusters(mapInstance);
+
+  // Which property ids should render as their normal rich marker right
+  // now — everything else is either grouped into a cluster circle or
+  // outside the current viewport/bounds. Empty until the first cluster
+  // fetch resolves, which briefly hides all property markers on first
+  // load — same trade-off as any other data-dependent overlay in this
+  // app (e.g. AQI), rather than flashing "every property" and then
+  // replacing it a moment later.
+  const listingIdsToShow = useMemo(
+    () => new Set(clusterResults.filter((r) => r.type === "listing").map((r) => r.id)),
+    [clusterResults]
+  );
 
   // Per-post comments cache + in-flight tracking. Comments load lazily —
   // the first time a post's popup opens (see loadComments below), not
@@ -383,6 +441,7 @@ export default function MapView({
           clickableIcons: false,
         });
         mapRef.current = map;
+        setMapInstance(map);
         onMapReadyRef.current?.(map);
 
         map.addListener("click", (e: google.maps.MapMouseEvent) => {
@@ -453,11 +512,14 @@ export default function MapView({
       infoWindowsRef.current.clear();
       pendingMarkerRef.current?.setMap(null);
       pendingMarkerRef.current = null;
+      clusterMarkersRef.current.forEach((marker) => marker.setMap(null));
+      clusterMarkersRef.current = [];
       if (mapRef.current) {
         google.maps.event.clearInstanceListeners(mapRef.current);
       }
       mapRef.current = null;
       setIsMapReady(false);
+      setMapInstance(null);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -470,14 +532,19 @@ export default function MapView({
     map.setOptions({ draggableCursor: isPickingLocation ? "crosshair" : null });
   }, [isPickingLocation, isMapReady]);
 
-  // Sync markers with the current (already filtered) property list.
+  // Sync markers with the current (already filtered) property list —
+  // further narrowed to only the ids the cluster API says should render
+  // individually right now (listingIdsToShow); anything else is grouped
+  // into a cluster circle or outside the current viewport (see the
+  // clustering effect further below).
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !isMapReady) return;
 
     const markers = markersRef.current;
     const infoWindows = infoWindowsRef.current;
-    const nextIds = new Set(properties.map((p) => p.id));
+    const visibleProperties = properties.filter((p) => listingIdsToShow.has(p.id));
+    const nextIds = new Set(visibleProperties.map((p) => p.id));
 
     // Remove markers that are no longer in the filtered set.
     markers.forEach((marker, id) => {
@@ -491,7 +558,7 @@ export default function MapView({
 
     // Add markers for newly visible properties. Existing markers are left
     // untouched so the map doesn't flicker on every filter change.
-    properties.forEach((property) => {
+    visibleProperties.forEach((property) => {
       if (markers.has(property.id)) return;
 
       const marker = new google.maps.Marker({
@@ -522,7 +589,53 @@ export default function MapView({
       markers.set(property.id, marker);
       infoWindows.set(property.id, infoWindow);
     });
-  }, [properties, isMapReady]);
+  }, [properties, listingIdsToShow, isMapReady]);
+
+  // Render cluster-circle markers from the latest cluster fetch. Unlike
+  // property markers (diffed incrementally above, to preserve open
+  // popups etc.), clusters are wholesale-cleared and rebuilt every time —
+  // per the "clear old markers before rendering new ones" requirement,
+  // and because there's no per-cluster state worth preserving across a
+  // rebuild (a cluster circle has no popup, nothing keyed to it besides
+  // its own position/count, both of which are exactly what's changing).
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !isMapReady) return;
+
+    clusterMarkersRef.current.forEach((marker) => marker.setMap(null));
+    clusterMarkersRef.current = clusterResults
+      .filter((result): result is ClusterPoint => result.type === "cluster")
+      .map((cluster) => {
+        const { url, size } = buildClusterIconUrl(cluster.count);
+        const marker = new google.maps.Marker({
+          position: { lat: cluster.lat, lng: cluster.lng },
+          map,
+          icon: {
+            url,
+            scaledSize: new google.maps.Size(size, size),
+            anchor: new google.maps.Point(size / 2, size / 2),
+          },
+          // Bonus: hover tooltip — the browser's native title tooltip is
+          // the simplest reliable way to get "N flats" on hover without
+          // building a custom overlay for it.
+          title: `${cluster.count} flat${cluster.count === 1 ? "" : "s"}`,
+          zIndex: 500,
+        });
+
+        // Click a cluster: zoom in on it (smoothly — bonus) and re-center;
+        // useClusters' bounds_changed/zoom_changed listeners pick up the
+        // new viewport automatically and re-fetch, breaking this cluster
+        // into smaller clusters or individual listings without any
+        // special-case code here.
+        marker.addListener("click", () => {
+          const currentZoom = map.getZoom() ?? 11;
+          map.panTo({ lat: cluster.lat, lng: cluster.lng });
+          smoothZoomTo(map, Math.min(currentZoom + 2, 18));
+        });
+
+        return marker;
+      });
+  }, [clusterResults, isMapReady]);
 
   // Existing InfoWindows' content is only set once, at marker-creation
   // time (above) or when comments load/change (loadComments/submitComment
