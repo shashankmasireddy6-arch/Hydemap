@@ -1,5 +1,6 @@
-import { Property } from "@/types/post";
+import { Property, getPostColor } from "@/types/post";
 import { formatCurrency } from "@/lib/format";
+import { POST_TYPE_ICON_MARKUP } from "@/components/icons";
 
 // Density-based color/size bands for the cluster bubble — carried over
 // from the original two-tier clustering feature's "color by density"
@@ -65,32 +66,56 @@ export function buildPriceRangeChipElement(
 
 /**
  * Zoomed in: a detailed preview chip for a single listing — price most
- * prominent, BHK/furnishing smaller below, per the spec. No rating line:
- * `Property` has no `rating` field and nothing in this app writes one (a
- * self-reported star rating on your own listing wouldn't mean anything
- * without a reviewer/tenant identity system), so this intentionally
- * doesn't fabricate one rather than inventing fake data.
+ * prominent, BHK/furnishing smaller below, per the spec. Color-coded and
+ * icon-badged by post type (`getPostColor` + `POST_TYPE_ICON_MARKUP`) —
+ * the exact same single source of truth `Legend.tsx` and the filter
+ * dropdown already use, so this matches the legend by construction
+ * rather than by eyeballed-similar colors; the icon shape (house outline
+ * vs. price tag vs. two people vs. checkmark) is what gives each type a
+ * visually distinct *shape*, not just a color, at a glance. No rating
+ * line: `Property` has no `rating` field and nothing in this app writes
+ * one (a self-reported star rating on your own listing wouldn't mean
+ * anything without a reviewer/tenant identity system), so this
+ * intentionally doesn't fabricate one rather than inventing fake data.
+ *
+ * Deliberately scoped to listing chips only — cluster bubbles and
+ * price-range pills each represent a *group* of posts that can span
+ * multiple types, so there's no single category color that would be
+ * accurate for those; they keep their existing density-based coloring.
  *
  * Clicking the chip is wired up by the caller (MapView), not here — it
  * opens the existing rich InfoWindow popup (photos, comments, delete),
  * unchanged from before this marker system existed.
  */
 export function buildListingChipElement(property: Property): HTMLDivElement {
+  const color = getPostColor(property.type);
   const details = [property.bhk ? `${property.bhk} BHK` : null, property.furnishing]
     .filter(Boolean)
     .join(" • ");
 
   const inner = document.createElement("div");
-  inner.className = `${CHIP_INNER_BASE} hover:scale-105 flex flex-col items-center gap-0.5 rounded-2xl border border-slate-100 bg-white px-3 py-1.5 leading-tight`;
-  inner.title = property.title;
+  // Smaller all around than the original design: tighter padding, smaller
+  // text, a smaller rounded-lg card (not rounded-2xl) so it reads as a
+  // compact chip rather than a small popup card.
+  inner.className = `${CHIP_INNER_BASE} hover:scale-105 flex flex-col items-center gap-0.5 rounded-lg border bg-white px-1.5 py-1 leading-tight`;
+  inner.style.borderColor = `${color}55`; // ~33% opacity — a colored ring without fighting the white background for attention
+  inner.title = `${property.type} • ${property.title}`;
   inner.innerHTML = `
-    <span class="whitespace-nowrap text-sm font-bold text-slate-900">${formatCurrency(property.price)}</span>
-    ${details ? `<span class="whitespace-nowrap text-[11px] text-slate-500">${details}</span>` : ""}
+    <div class="flex items-center gap-1">
+      <span class="flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full" style="background-color: ${color}1a">
+        <svg viewBox="0 0 24 24" width="8" height="8" fill="none" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" style="stroke: ${color}">
+          ${POST_TYPE_ICON_MARKUP[property.type]}
+        </svg>
+      </span>
+      <span class="whitespace-nowrap text-[11px] font-bold text-slate-900">${formatCurrency(property.price)}</span>
+    </div>
+    ${details ? `<span class="whitespace-nowrap text-[9px] text-slate-500">${details}</span>` : ""}
   `;
 
   const caret = document.createElement("div");
-  caret.className = "mx-auto h-2 w-2 rotate-45 border-b border-r border-slate-100 bg-white";
-  caret.style.marginTop = "-5px";
+  caret.className = "mx-auto h-1.5 w-1.5 rotate-45 border-b border-r bg-white";
+  caret.style.borderColor = `${color}55`;
+  caret.style.marginTop = "-4px";
   inner.appendChild(caret);
 
   // Anchored above its map point (like a pin's tip), not centered on it —
