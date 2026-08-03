@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { fetchActiveListingPointsAdmin } from "@/lib/adminPostsService";
-import { clusterItems, getGridSize, isWithinBounds } from "@/lib/clusterGrid";
+import { clusterItems, getClusterTier, getGridSize, isWithinBounds } from "@/lib/clusterGrid";
 import { ClusterResult, MapBounds } from "@/types/cluster";
 
 // --- In-memory response cache, keyed by rounded bounds + zoom ---------
@@ -98,8 +98,9 @@ export async function GET(request: NextRequest) {
     const allPoints = await fetchActiveListingPointsAdmin();
     const pointsInBounds = allPoints.filter((point) => isWithinBounds(point, bounds));
 
+    const tier = getClusterTier(zoom);
     const gridSize = getGridSize(zoom);
-    const results = clusterItems(pointsInBounds, gridSize);
+    const results = clusterItems(pointsInBounds, gridSize, tier);
 
     setCached(cacheKey, results);
     return NextResponse.json(results, { headers: { "X-Cache": "MISS" } });

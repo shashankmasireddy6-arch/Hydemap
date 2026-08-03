@@ -207,19 +207,26 @@ lib/
                          file) — backs app/api/comments/notify and app/api/clusters
   adminPostsService.ts   Server-only, Admin-SDK counterpart to postsService.ts's fetchPosts(),
                           for routes where the client SDK doesn't work at all (see "Map
-                          clustering" in Notes) — pulls only id/lat/lng, all clustering needs
+                          clustering" in Notes) — pulls id/lat/lng/rent, all clustering needs
   postsService.ts      Firestore reads/writes for posts: fetchPosts(), addPost(), softDeletePost();
                         uploadPostPhotos() for Storage uploads
   commentsService.ts    Firestore reads/writes for comments: fetchComments(), addComment(),
                         notifyPosterOfComment() (calls the API route above)
-  clusterGrid.ts         Pure grid-clustering logic: getGridSize(zoom), clusterItems(),
-                          isWithinBounds() — the JS equivalent of a SQL GROUP BY, since
-                          Firestore has no native aggregation (backs app/api/clusters)
+  clusterGrid.ts         Pure grid-clustering logic: getClusterTier(zoom), getGridSize(zoom),
+                          clusterItems(), isWithinBounds() — the JS equivalent of a SQL GROUP
+                          BY, since Firestore has no native aggregation (backs app/api/clusters)
   useClusters.ts          Debounced (300ms) fetch-on-pan/zoom hook backing map clustering;
                           same coalesce-in-flight pattern as useAqi.ts (see below)
+  htmlMarkerOverlay.ts    createHtmlMarkerOverlay() — a google.maps.OverlayView wrapper for
+                          rendering a real DOM/CSS element as a map marker (see "Map
+                          clustering" in Notes for why classic Marker can't do this)
+  markerChips.ts          Builds the three chip elements clustering renders (cluster bubble,
+                          price-range pill, listing chip) plus fadeInChip() for their entrance
+                          animation — Tailwind classes in template strings, like MapView's
+                          buildPopupHtml (see the note on tailwind.config.js's content globs)
   smoothZoom.ts           smoothZoomTo(map, targetZoom) — steps zoom by 1 every 120ms, since
-                          Maps JS has no native zoom-tween; shared by SearchBar and cluster
-                          click-to-zoom
+                          Maps JS has no native zoom-tween; shared by SearchBar and cluster/
+                          price-range-chip click-to-zoom
   useAuth.ts            Google Sign-In state + ADMIN_EMAIL check (see the Admin delete setup above)
   filterProperties.ts  Pure filter function (type + price range), reusable/testable
   createPostForm.ts    Create-post form state, defaults, and validation/parsing (kept out of the UI)
@@ -475,22 +482,33 @@ scripts/
     "Comment notifications" setup section above for the Resend sandbox
     domain caveat (emails silently won't reach real posters until a
     sending domain is verified).
-- **Map clustering**: at low zoom, markers are grouped into numbered circle
-  clusters instead of rendering one pin per post; clicking a cluster zooms
-  and re-centers on it, breaking it into smaller clusters or individual
-  pins.
+- **Map clustering**: a three-tier zoom system — zoomed out shows numbered
+  cluster bubbles, mid zoom shows price-range pills, zoomed in shows a
+  detailed chip per listing (price prominent, BHK/furnishing below).
+  Clicking a cluster or price-range chip zooms in and re-centers on it,
+  breaking it into a finer-grained group or individual listing chips;
+  clicking a listing chip opens the same rich InfoWindow popup (photos,
+  full details, comments, admin delete) this app already had before any
+  of this existed — see "Custom chip markers, not classic Marker" below
+  for why that split works out cleanly.
   - **Server-side aggregation**, not a client-side clustering library:
     `GET /api/clusters?north=&south=&east=&west=&zoom=` (`app/api/clusters`)
-    fetches every active post's `id`/`lat`/`lng` via
-    `lib/adminPostsService.ts`, filters to the requested bounds, buckets
-    into a lat/lng grid (`lib/clusterGrid.ts#clusterItems`, the JS
-    equivalent of the classic `GROUP BY FLOOR(lat/gridSize), FLOOR(lng/gridSize)`
-    approach — Firestore has no native aggregation), and returns one entry
-    per bucket: `{ type: "cluster", lat, lng, count }` for buckets with 2+
-    posts (centroid = average lat/lng), or `{ type: "listing", lat, lng, id }`
-    unchanged for a bucket with exactly one. Grid size steps down with zoom
-    (`getGridSize`: 0.05 → 0.02 → 0.01 → individual pins past zoom 16),
-    matching the original spec exactly.
+    fetches every active post's `id`/`lat`/`lng`/`rent` via
+    `lib/adminPostsService.ts` (`rent` is the post's `price` field — see
+    that file's doc comment for why `price`/`monthlyRent` are always
+    equal), filters to the requested bounds, buckets into a lat/lng grid
+    (`lib/clusterGrid.ts#clusterItems`, the JS equivalent of the classic
+    `GROUP BY FLOOR(lat/gridSize), FLOOR(lng/gridSize)` approach —
+    Firestore has no native aggregation), and returns one entry per
+    bucket, shaped by the current zoom's tier (`getClusterTier`):
+    `zoom <= 10` → `{ type: "cluster", lat, lng, count }`; `zoom 11–15` →
+    `{ type: "price-range", lat, lng, count, minRent, maxRent }`; `zoom >
+    15` → every point returned individually as `{ type: "listing", lat,
+    lng, id }`, no bucketing at all. A bucket with exactly one item always
+    renders as a `listing`, regardless of tier or zoom — a "cluster/
+    price-range of 1" isn't a useful thing to show (same reasoning
+    Google's own MarkerClusterer uses), it just means an isolated listing
+    can show its detailed chip even fairly zoomed out, which reads fine.
   - **Why the Admin SDK, not the client SDK**, even though clustering only
     ever touches public data: the client Firestore SDK's gRPC transport
     doesn't work inside a Next.js Route Handler at all — it fails at
@@ -521,44 +539,83 @@ scripts/
     nothing guarantees the same instance (and therefore this module-level
     `Map`) survives between any two given requests. Swap for Vercel
     KV/Redis if that guarantee ever starts to matter.
+  - **Custom chip markers, not classic `Marker`**: the spec explicitly asks
+    for real HTML/CSS chips (gradients, two differently-sized lines of
+    text, hover scale, rounded pills) instead of a flat icon, which
+    classic `google.maps.Marker` genuinely cannot render — its `icon` is
+    always a static image. `lib/htmlMarkerOverlay.ts` wraps
+    `google.maps.OverlayView` (positioning a real DOM element via
+    `fromLatLngToDivPixel`, attached to the map's `overlayMouseTarget`
+    pane so it still receives real click/hover events) and
+    `lib/markerChips.ts` builds the three chip elements — Tailwind classes
+    in template strings, the same technique `MapView.tsx`'s
+    `buildPopupHtml` already used, just factored into their own file
+    (which is why `tailwind.config.js`'s content globs now include
+    `./lib/**/*` too — without that, these classes would work in dev but
+    silently vanish from the production build, since Tailwind only scans
+    what its config tells it to).
+  - **A real CSS gotcha hit and fixed while building this**: each chip
+    needs an inline `transform` to anchor it at its map point (translate
+    to center/offset it), and also a `hover:scale-*` Tailwind class for
+    the hover-grow effect — but CSS only honors *one* `transform`
+    declaration per element, and an inline style always wins over a class,
+    so the positioning transform silently ate the hover effect entirely
+    (confirmed via a headless browser check: the computed `transform` was
+    identical hovered vs. not). Fixed by splitting each chip into two
+    elements — an outer wrapper that owns the positioning `transform`
+    (set once, in `lib/markerChips.ts#wrapPositioned`) and an inner
+    element that owns the hover-scale `transform` (via the Tailwind
+    class), so the two no longer compete for the same CSS property.
+  - **No rating on the listing chip**: the spec's detailed chip design
+    includes a star rating, but `Property` has no `rating` field and
+    nothing in this app writes one — a self-reported rating on your own
+    listing wouldn't mean anything without a reviewer/tenant identity
+    system. Rather than fabricate one, the chip just omits that line.
   - **Frontend**: `lib/useClusters.ts` listens for `bounds_changed` and
     `zoom_changed`, debounces 300ms, and fetches `/api/clusters` — reusing
     the same coalesce-in-flight-requests pattern as `lib/useAqi.ts`
     (finish the current fetch, then run once more with the latest
     bounds/zoom, rather than aborting and restarting on every event),
     since that pattern was what fixed a real livelock found earlier on the
-    train/bus map controls under rapid pan/zoom. `MapView.tsx` renders
-    cluster results as colored circle markers (density-based color:
-    indigo-300 for ≤5, indigo-600 for ≤20, rose-600 above that; radius
-    grows with count too) built as inline SVG data URIs, the same
-    technique `buildMarkerIconUrl` already uses for property pins.
-    Individual posts are viewport-culled to exactly the `listing` ids the
-    API returned (`listingIdsToShow`), instead of always rendering every
-    fetched post, so a post outside the clustering response's bucket
-    resolution never double-renders as both part of a cluster and its own
-    pin. Cluster markers are fully cleared and rebuilt on every
-    `clusterResults` change (simpler than diffing, and cluster counts
-    change on essentially every pan/zoom anyway, unlike property markers
-    which mostly don't).
-  - **Click-to-zoom**: a cluster's `click` listener pans to its centroid
-    and zooms in by 2 levels (capped at 18) via `lib/smoothZoom.ts`'s
-    `smoothZoomTo` — extracted from `SearchBar.tsx`, which already had the
-    same "step zoom by 1 every 120ms" workaround for Maps JS having no
-    native zoom-tween. The `bounds_changed`/`zoom_changed` listeners then
-    naturally trigger a re-fetch at the new zoom, same as any other
-    pan/zoom.
-  - **Hover tooltip**: each cluster marker's native `title` attribute reads
-    "N flats" — the classic `google.maps.Marker` API's only built-in hover
-    affordance; a custom HTML tooltip would need `AdvancedMarkerElement`
-    (which needs a Map ID set up in Google Cloud), the same trade-off
-    already noted for property markers' hover/pulse effects above.
-  - **Tested against this app's real (~10-listing) Firestore data**: at
-    city-level zoom, clusters and individual pins render correctly
-    side-by-side; clicking a cluster zooms in and correctly re-clusters at
-    the new zoom; the fixed zoom-band grid sizes (0.05° even at zoom 5,
-    matching the spec) mean that zooming out to whole-country scale
-    visually collapses Hyderabad's ~10 posts into what looks like one or
-    two markers, since they're only ~30km apart and the grid doesn't
-    shrink further past zoom ≤10 — expected given the fixed-band approach
-    the spec asked for, and not a scenario a single-city app's map would
-    realistically be zoomed to anyway.
+    train/bus map controls under rapid pan/zoom. It also accepts an
+    optional `refreshKey` (`MapView` passes `properties.length`) that
+    forces an immediate re-fetch when it changes, bypassing the debounce —
+    without this, a freshly created post's chip wouldn't appear until the
+    next pan/zoom, since bounds/zoom haven't changed and the hook would
+    otherwise have no way to learn the listing set changed.
+    `listingIdsToShow` in `MapView.tsx` is `null` (meaning "show every
+    property, unclustered") whenever `useClusters` reports an error —
+    clustering is a display nicety layered on top of the map, not the
+    source of truth for which posts exist, so a failed `/api/clusters`
+    call (missing env var, cold start, network blip) has to fail open,
+    not hide every listing on the map; this was a real bug found and
+    fixed after clustering first shipped, when a missing production env
+    var made every post vanish from the live site even though they were
+    all still safely in Firestore. Cluster/price-range chips are fully
+    cleared and rebuilt on every `clusterResults` change (simpler than
+    diffing, and their counts/ranges change on essentially every pan/zoom
+    anyway, unlike property markers which mostly don't); listing chips are
+    diffed incrementally like before, keyed by property id, so an open
+    InfoWindow or loaded-comments cache survives unrelated marker changes.
+  - **Click-to-zoom**: a cluster or price-range chip's `click` listener
+    pans to its centroid and zooms in by 2 levels (capped at 18) via
+    `lib/smoothZoom.ts`'s `smoothZoomTo` — extracted from `SearchBar.tsx`,
+    which already had the same "step zoom by 1 every 120ms" workaround for
+    Maps JS having no native zoom-tween. The `bounds_changed`/
+    `zoom_changed` listeners then naturally trigger a re-fetch at the new
+    zoom, same as any other pan/zoom.
+  - **Hover tooltip**: cluster/price-range chips' native `title` attribute
+    reads "N flats" — the simplest reliable hover affordance without
+    building a custom tooltip overlay on top of an already-custom overlay.
+  - **Tested against this app's real (~10-listing) Firestore data**, all
+    three tiers: at city zoom, price-range pills and listing chips render
+    correctly side-by-side; zoomed out, cluster bubbles take over; zoomed
+    in past 15, every post gets its own detailed chip; clicking a cluster/
+    price-range chip zooms in and correctly re-groups at the new zoom;
+    clicking a listing chip opens the unmodified InfoWindow popup
+    (comments, admin delete, verified badge all intact); hover-scale
+    confirmed via computed-style checks in a headless browser (not just
+    visually) after the transform bug above was found and fixed; the
+    fail-open fallback was re-verified against this new marker system by
+    forcing `/api/clusters` to fail and confirming every listing still
+    renders as a chip.

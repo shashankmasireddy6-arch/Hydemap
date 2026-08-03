@@ -3,6 +3,12 @@ module.exports = {
   content: [
     "./app/**/*.{js,ts,jsx,tsx,mdx}",
     "./components/**/*.{js,ts,jsx,tsx,mdx}",
+    // lib/markerChips.ts builds map marker DOM nodes with Tailwind
+    // classes in plain template strings (same technique MapView.tsx's
+    // buildPopupHtml already used, just in its own file this time) — the
+    // content scanner needs to see them here or it strips the classes
+    // from the production build.
+    "./lib/**/*.{js,ts,jsx,tsx,mdx}",
   ],
   theme: {
     extend: {

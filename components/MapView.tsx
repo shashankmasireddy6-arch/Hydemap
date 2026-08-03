@@ -6,8 +6,15 @@ import { LatLng, Property, getPostColor, HYDERABAD_CENTER } from "@/types/post";
 import { Comment } from "@/types/comment";
 import { addComment, fetchComments, notifyPosterOfComment } from "@/lib/commentsService";
 import { useClusters } from "@/lib/useClusters";
-import { ClusterPoint } from "@/types/cluster";
+import { ClusterPoint, PriceRangePoint } from "@/types/cluster";
 import { smoothZoomTo } from "@/lib/smoothZoom";
+import { createHtmlMarkerOverlay, HtmlMarkerOverlay } from "@/lib/htmlMarkerOverlay";
+import {
+  buildClusterBubbleElement,
+  buildListingChipElement,
+  buildPriceRangeChipElement,
+  fadeInChip,
+} from "@/lib/markerChips";
 import { POST_TYPE_ICON_MARKUP } from "@/components/icons";
 
 // Replace with a real Google Maps API key before deploying (or set
@@ -47,52 +54,6 @@ const escapeHtml = (value: string) =>
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
-
-// Classic Markers render their icon as a static image, outside the page's
-// live DOM/CSS — so unlike the popup HTML below, this can't rely on
-// Tailwind classes. It reuses the same icon path data as everywhere else,
-// just wrapped in a plain `stroke="white"` attribute (SVG's own attribute
-// inheritance still applies inside a standalone SVG image).
-function buildMarkerIconUrl(property: Property): string {
-  const color = getPostColor(property.type);
-  const svg = `
-    <svg xmlns="http://www.w3.org/2000/svg" width="30" height="30" viewBox="0 0 30 30">
-      <circle cx="15" cy="15" r="13" fill="${color}" stroke="white" stroke-width="2.2" />
-      <g transform="translate(7.5,7.5) scale(0.625)" fill="none" stroke="white" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
-        ${POST_TYPE_ICON_MARKUP[property.type]}
-      </g>
-    </svg>
-  `.trim();
-  return `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`;
-}
-
-// Density-based coloring (bonus): cool/light for small clusters, warmer
-// and more saturated as the count climbs, so density reads at a glance
-// without needing to actually read the number.
-function getClusterColor(count: number): string {
-  if (count <= 5) return "#818cf8"; // indigo-400
-  if (count <= 20) return "#4f46e5"; // indigo-600
-  return "#e11d48"; // rose-600 — noticeably "hot" for a dense area
-}
-
-// Same data-URI SVG technique as buildMarkerIconUrl — a colored circle,
-// sized up slightly for bigger clusters, with the count centered inside.
-// Google's classic Marker can't render arbitrary styled HTML as an icon,
-// only an image, hence generating one on the fly per cluster.
-function buildClusterIconUrl(count: number): { url: string; size: number } {
-  const color = getClusterColor(count);
-  const size = count <= 5 ? 34 : count <= 20 ? 40 : 46;
-  const half = size / 2;
-  const fontSize = count >= 100 ? 12 : 13;
-  const svg = `
-    <svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">
-      <circle cx="${half}" cy="${half}" r="${half - 1.5}" fill="${color}" stroke="white" stroke-width="2.5" />
-      <text x="${half}" y="${half}" text-anchor="middle" dominant-baseline="central"
-            font-family="system-ui, sans-serif" font-size="${fontSize}" font-weight="700" fill="white">${count}</text>
-    </svg>
-  `.trim();
-  return { url: `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(svg)}`, size };
-}
 
 // Types that carry a recurring monthly amount (see buildPropertyFromForm,
 // which folds the user's input into `price` either way) vs. a one-time
@@ -300,16 +261,19 @@ export default function MapView({
 
   // Keyed by property id so filter changes only add/remove the markers
   // that actually entered or left the result set, instead of rebuilding
-  // all of them on every keystroke/slider tick.
-  const markersRef = useRef<Map<string, google.maps.Marker>>(new Map());
+  // all of them on every keystroke/slider tick. HtmlMarkerOverlay (not
+  // classic Marker) — see lib/htmlMarkerOverlay.ts for why: these render
+  // real, styled "detailed listing chip" HTML per the marker-design spec,
+  // not a flat icon image.
+  const markersRef = useRef<Map<string, HtmlMarkerOverlay>>(new Map());
   const infoWindowsRef = useRef<Map<string, google.maps.InfoWindow>>(new Map());
   const pendingMarkerRef = useRef<google.maps.Marker | null>(null);
-  // Cluster-circle markers are ephemeral and rebuilt wholesale on every
-  // cluster-result change (see the clustering effect below) rather than
-  // diffed like property markers — there's no per-cluster state (like an
-  // open popup) worth preserving across a rebuild the way there is for a
-  // property's InfoWindow.
-  const clusterMarkersRef = useRef<google.maps.Marker[]>([]);
+  // Cluster-bubble / price-range-pill chips are ephemeral and rebuilt
+  // wholesale on every cluster-result change (see the clustering effect
+  // below) rather than diffed like property markers — there's no
+  // per-marker state (like an open popup) worth preserving across a
+  // rebuild the way there is for a property's InfoWindow.
+  const clusterMarkersRef = useRef<HtmlMarkerOverlay[]>([]);
 
   // Clustering: fetches /api/clusters, debounced on bounds/zoom changes
   // (see lib/useClusters.ts). `results` mixes ClusterPoints (grouped
@@ -571,18 +535,16 @@ export default function MapView({
     visibleProperties.forEach((property) => {
       if (markers.has(property.id)) return;
 
-      const marker = new google.maps.Marker({
-        position: { lat: property.latitude, lng: property.longitude },
-        map,
-        icon: {
-          url: buildMarkerIconUrl(property),
-          scaledSize: new google.maps.Size(30, 30),
-          anchor: new google.maps.Point(15, 15),
-        },
-        title: property.title,
-      });
+      const position = { lat: property.latitude, lng: property.longitude };
+      const element = buildListingChipElement(property);
+      const overlay = createHtmlMarkerOverlay(map, position, element);
+      fadeInChip(element);
 
+      // `position` (not an `anchor`) since there's no classic Marker to
+      // anchor to anymore — an HtmlMarkerOverlay isn't an MVCObject with
+      // its own getPosition().
       const infoWindow = new google.maps.InfoWindow({
+        position,
         content: buildPopupHtml(
           property,
           isAdminRef.current,
@@ -591,63 +553,59 @@ export default function MapView({
         ),
       });
 
-      marker.addListener("click", () => {
-        infoWindow.open({ map, anchor: marker });
+      element.addEventListener("click", () => {
+        infoWindow.open({ map });
         loadComments(property);
       });
 
-      markers.set(property.id, marker);
+      markers.set(property.id, overlay);
       infoWindows.set(property.id, infoWindow);
     });
   }, [properties, listingIdsToShow, isMapReady]);
 
-  // Render cluster-circle markers from the latest cluster fetch. Unlike
-  // property markers (diffed incrementally above, to preserve open
-  // popups etc.), clusters are wholesale-cleared and rebuilt every time —
-  // per the "clear old markers before rendering new ones" requirement,
-  // and because there's no per-cluster state worth preserving across a
-  // rebuild (a cluster circle has no popup, nothing keyed to it besides
-  // its own position/count, both of which are exactly what's changing).
+  // Render cluster-bubble (zoomed out) and price-range-pill (mid zoom)
+  // chips from the latest cluster fetch. Unlike property markers (diffed
+  // incrementally above, to preserve open popups etc.), these are
+  // wholesale-cleared and rebuilt every time — per the "clear old markers
+  // before rendering new ones" requirement, and because there's no
+  // per-marker state worth preserving across a rebuild (neither chip has
+  // a popup; nothing is keyed to one besides its own position/count/
+  // range, all of which are exactly what's changing).
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !isMapReady) return;
 
     clusterMarkersRef.current.forEach((marker) => marker.setMap(null));
     // On error, listingIdsToShow's fallback already renders every property
-    // individually (see above) — skip clusters entirely here rather than
-    // drawing stale circles (results isn't reset on a failed fetch) on top
-    // of/instead of those now-visible pins.
+    // individually (see above) — skip these entirely here rather than
+    // drawing stale groups (results isn't reset on a failed fetch) on top
+    // of/instead of those now-visible chips.
     clusterMarkersRef.current = (clustersError ? [] : clusterResults)
-      .filter((result): result is ClusterPoint => result.type === "cluster")
-      .map((cluster) => {
-        const { url, size } = buildClusterIconUrl(cluster.count);
-        const marker = new google.maps.Marker({
-          position: { lat: cluster.lat, lng: cluster.lng },
-          map,
-          icon: {
-            url,
-            scaledSize: new google.maps.Size(size, size),
-            anchor: new google.maps.Point(size / 2, size / 2),
-          },
-          // Bonus: hover tooltip — the browser's native title tooltip is
-          // the simplest reliable way to get "N flats" on hover without
-          // building a custom overlay for it.
-          title: `${cluster.count} flat${cluster.count === 1 ? "" : "s"}`,
-          zIndex: 500,
-        });
+      .filter(
+        (result): result is ClusterPoint | PriceRangePoint =>
+          result.type === "cluster" || result.type === "price-range"
+      )
+      .map((result) => {
+        const element =
+          result.type === "cluster"
+            ? buildClusterBubbleElement(result.count)
+            : buildPriceRangeChipElement(result.minRent, result.maxRent, result.count);
 
-        // Click a cluster: zoom in on it (smoothly — bonus) and re-center;
-        // useClusters' bounds_changed/zoom_changed listeners pick up the
-        // new viewport automatically and re-fetch, breaking this cluster
-        // into smaller clusters or individual listings without any
-        // special-case code here.
-        marker.addListener("click", () => {
+        const overlay = createHtmlMarkerOverlay(map, { lat: result.lat, lng: result.lng }, element);
+        fadeInChip(element);
+
+        // Click a cluster or price-range chip: zoom in on it (smoothly —
+        // bonus) and re-center; useClusters' bounds_changed/zoom_changed
+        // listeners pick up the new viewport automatically and re-fetch,
+        // breaking this group into smaller groups or individual listing
+        // chips without any special-case code here.
+        element.addEventListener("click", () => {
           const currentZoom = map.getZoom() ?? 11;
-          map.panTo({ lat: cluster.lat, lng: cluster.lng });
+          map.panTo({ lat: result.lat, lng: result.lng });
           smoothZoomTo(map, Math.min(currentZoom + 2, 18));
         });
 
-        return marker;
+        return overlay;
       });
   }, [clusterResults, clustersError, isMapReady]);
 
