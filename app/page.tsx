@@ -258,7 +258,12 @@ export default function HomePage() {
       setSelectedLocation(null);
     } catch (err) {
       console.error("Failed to add post to Firestore:", err);
-      setFormError("Couldn't save the post. Please try again.");
+      // Prefer a thrown error's own message (e.g. uploadPostPhotos's
+      // timeout explains *why*, like Storage not being enabled) over a
+      // generic one — most of what can throw here already has a
+      // user-actionable message rather than a raw Firebase error string.
+      const message = err instanceof Error && err.message ? err.message : undefined;
+      setFormError(message ?? "Couldn't save the post. Please try again.");
     } finally {
       setIsSubmitting(false);
     }

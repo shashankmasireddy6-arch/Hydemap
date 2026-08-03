@@ -103,6 +103,23 @@ export async function softDeletePost(postId: string): Promise<void> {
   await updateDoc(doc(db, POSTS_COLLECTION, postId), { status: "deleted" });
 }
 
+// uploadBytes has its own built-in retry-with-backoff for transient
+// failures, which is normally helpful — but for a genuinely broken/missing
+// bucket (e.g. Storage never enabled in the Firebase console) it means the
+// upload never settles at all, leaving the Create Post form stuck on
+// "Saving…" indefinitely instead of surfacing an error. This timeout is
+// what actually makes that failure visible.
+const UPLOAD_TIMEOUT_MS = 20_000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => {
+      setTimeout(() => reject(new Error(message)), ms);
+    }),
+  ]);
+}
+
 /**
  * Uploads post photos to Firebase Storage and returns their download URLs,
  * so they can ride along with the initial addPost() write. Grouped under a
@@ -113,7 +130,11 @@ export async function uploadPostPhotos(photos: File[]): Promise<string[]> {
   const folder = crypto.randomUUID();
   const uploads = photos.map(async (file, index) => {
     const fileRef = storageRef(storage, `posts/${folder}/${index}-${file.name}`);
-    await uploadBytes(fileRef, file);
+    await withTimeout(
+      uploadBytes(fileRef, file),
+      UPLOAD_TIMEOUT_MS,
+      "Photo upload timed out. Check that Firebase Storage is enabled (see README), or remove the photos and try again."
+    );
     return getDownloadURL(fileRef);
   });
   return Promise.all(uploads);
