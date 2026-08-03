@@ -291,9 +291,20 @@ export default function HomePage() {
         <AdminAuth />
       </div>
 
-      {/* Top area: search, results count, filter bar / picking banner, insights, location badge */}
+      {/* Top area: search + filter bar side by side, results count, insights, location badge */}
       <div className="pointer-events-none absolute inset-x-0 top-0 flex flex-col items-center gap-2 p-3 sm:p-4">
-        {!isPickingLocation && <SearchBar map={map} />}
+        <div className="flex w-full max-w-md flex-col items-stretch gap-2 sm:w-auto sm:max-w-none sm:flex-row sm:items-start">
+          {!isPickingLocation && <SearchBar map={map} />}
+          {!isLoading && !isPickingLocation && (
+            <FilterBar
+              selectedType={selectedType}
+              onTypeChange={setSelectedType}
+              budget={budget}
+              onBudgetChange={setBudget}
+              budgetLimits={BUDGET_LIMITS}
+            />
+          )}
+        </div>
         {isLoading ? (
           <div className="pointer-events-auto rounded-full border border-slate-100 bg-white/95 px-4 py-1.5 text-xs font-medium text-slate-500 shadow-panel backdrop-blur-md">
             Loading posts…
@@ -301,17 +312,7 @@ export default function HomePage() {
         ) : (
           <>
             <ResultsCount visible={filteredProperties.length} total={posts.length} />
-            {isPickingLocation ? (
-              <PickLocationBanner onCancel={handleCancelPicking} />
-            ) : (
-              <FilterBar
-                selectedType={selectedType}
-                onTypeChange={setSelectedType}
-                budget={budget}
-                onBudgetChange={setBudget}
-                budgetLimits={BUDGET_LIMITS}
-              />
-            )}
+            {isPickingLocation && <PickLocationBanner onCancel={handleCancelPicking} />}
             <RentInsightsCard averageRent={averageRent} rentPaidRange={rentPaidRange} />
             {usingDemoData && (
               <div className="pointer-events-auto rounded-full border border-amber-200 bg-amber-50 px-3.5 py-1.5 text-xs font-medium text-amber-800">
