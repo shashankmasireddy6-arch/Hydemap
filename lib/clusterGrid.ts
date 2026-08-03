@@ -20,21 +20,34 @@ export function getClusterTier(zoom: number): ClusterTier {
 // for lat, ~106km/degree for lng at Hyderabad's ~17.4°N — close enough to
 // treat as one number, same approximation the original version used).
 //
-// Tuned so cells never shrink below ~3.9km while still inside the
-// "cluster"/"price-range" tiers: at the default city-wide view (zoom 11,
-// viewport ~85km across), a 2.2km cell (the original size here) meant two
-// listings even 3-4km apart never landed in the same bucket, so most of
-// this app's sparse (~10) listings rendered as scattered individual chips
-// instead of a rent-range pill — clustering only ever visibly kicked in
-// once zoomed out to city/region scale (zoom <= 10). Individual chips are
-// reserved for the "listing" tier (zoom > 15, viewport ≲ 3-5km) below —
-// anything wider than that should now show *some* grouped marker.
+// One step per zoom level within the "price-range" tier (11-15), not just
+// two bands covering the whole range — an earlier version used a single
+// ~6.6km cell for 11-13 and a single ~3.9km cell for 14-15, so zooming in
+// *within* either range (e.g. 14 -> 15) visibly did nothing: groups that
+// looked clustered stayed exactly as clustered, since the cell size
+// hadn't changed at all. Every zoom level now gets its own smaller cell.
+//
+// The cell at zoom 15 (the tier's most-zoomed-in edge, right before
+// "listing" takes over and stops bucketing entirely) shrinks all the way
+// to ~2km rather than stopping around ~3.5-4km — found by testing against
+// this app's actual data, which has a dense pocket of ~13 listings inside
+// a ~2-3km radius near central Hyderabad. A ~3.5-4km cell is *bigger*
+// than that whole pocket, so no amount of zooming within the price-range
+// tier could ever separate them — every zoom level from 11 to 15 kept
+// producing the same grouping, which read as "stuck clustering that
+// doesn't respond to zoom" even though the cell size genuinely was
+// shrinking. A ~2km cell at zoom 15 is finer than that pocket's spread,
+// so it now visibly keeps breaking up right up to the individual-listing
+// cutover (zoom > 15, viewport ≲ 3-5km).
 export function getGridSize(zoom: number): number {
   if (getClusterTier(zoom) === "listing") return 0;
   if (zoom <= 8) return 0.2; // ~22km — cluster tier, city/large-area view
   if (zoom <= 10) return 0.12; // ~13km — cluster tier
-  if (zoom <= 13) return 0.06; // ~6.6km — price-range tier, upper end
-  return 0.035; // 14–15, ~3.9km — price-range tier's most-zoomed-in edge
+  if (zoom <= 11) return 0.08; // ~8.8km — price-range tier, city-wide default view
+  if (zoom <= 12) return 0.055; // ~6.1km
+  if (zoom <= 13) return 0.038; // ~4.2km
+  if (zoom <= 14) return 0.026; // ~2.9km
+  return 0.018; // 15, ~2km — price-range tier's most-zoomed-in edge
 }
 
 export interface ClusterableItem {
