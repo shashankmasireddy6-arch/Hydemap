@@ -61,10 +61,15 @@ export interface ClusterableItem {
 /**
  * Buckets items into a lat/lng grid and aggregates each bucket into a
  * ClusterPoint or PriceRangePoint (depending on `tier`) — or, for a bucket
- * with exactly one item, a ListingPoint instead, regardless of tier: a
- * single isolated point renders as a normal chip rather than a "cluster/
- * price-range of 1", which reads better and is what most clustering UIs
- * (Google's own MarkerClusterer included) do.
+ * with exactly one item in the "price-range"/"listing" tiers, a
+ * ListingPoint instead: a single isolated point renders as a normal chip
+ * rather than a "price-range of 1", which reads better and is what most
+ * clustering UIs (Google's own MarkerClusterer included) do at a
+ * moderate zoom. The "cluster" tier is the one exception — at city/
+ * region scale, a full detailed price/BHK chip next to a field of tiny
+ * count bubbles reads as visually inconsistent clutter (confirmed by
+ * screenshot), so a lone listing there still renders as a small "1"
+ * bubble matching its neighbors' style instead.
  *
  * This is the JS equivalent of the spec's SQL GROUP BY aggregation —
  * Firestore has no GROUP BY, so the same grid-bucket-and-aggregate logic
@@ -122,7 +127,11 @@ export function clusterItems(
   for (const bucket of buckets.values()) {
     if (bucket.items.length === 1) {
       const only = bucket.items[0];
-      results.push({ type: "listing", lat: only.lat, lng: only.lng, id: only.id });
+      if (tier === "cluster") {
+        results.push({ type: "cluster", lat: only.lat, lng: only.lng, count: 1 });
+      } else {
+        results.push({ type: "listing", lat: only.lat, lng: only.lng, id: only.id });
+      }
       continue;
     }
 
