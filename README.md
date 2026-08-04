@@ -195,8 +195,8 @@ components/
   SelectedLocationBadge.tsx "📍 lat, lng · Add post here · ✕" shortcut shown after a map click
   SearchBar.tsx             Location search (OpenStreetMap Nominatim) — pans/zooms the map and
                              drops a marker on a selected result
-  MapControls.tsx           Floating top-right panel: Metro lines (Google TransitLayer), Satellite
-                             toggle, and the AQI indicator
+  MapControls.tsx           Floating top-right panel: Metro lines (data/metroLines.ts, see
+                             "Metro lines" in Notes), Satellite toggle, and the AQI indicator
   AdminAuth.tsx              Top-left "Admin sign in" / signed-in-email pill (Google Sign-In)
   Toast.tsx                  Bottom-center self-dismissing notification (e.g. "Post deleted.")
 lib/
@@ -229,6 +229,8 @@ lib/
   useAuth.ts            Google Sign-In state + ADMIN_EMAIL check (see the Admin delete setup above)
   filterProperties.ts  Pure filter function (type + price range), reusable/testable
   createPostForm.ts    Create-post form state, defaults, and validation/parsing (kept out of the UI)
+  nearMetro.ts          isNearAnyMetroStation() — haversine distance check backing the "Near
+                          Metro" filter (see "Metro lines" in Notes)
   format.ts            Shared currency formatter (₹, abbreviated to lakhs)
   aqi.ts                WAQI fetch + the Good/Moderate/Poor categorization for the AQI control
   useAqi.ts             Debounced fetch-on-pan hook backing the AQI control (see MapControls.tsx)
@@ -238,6 +240,8 @@ types/
   cluster.ts         ClusterPoint, ListingPoint, ClusterResult, MapBounds
 data/
   properties.json    Demo/fallback property records: id, type, price, latitude, longitude, title
+  metroLines.ts       Hardcoded real Hyderabad Metro route geometry + station locations
+                      (Red/Blue/Green lines) — see "Metro lines" in Notes
 firestore.rules      Firestore security rules (manual copy-paste into the console — see "Admin
                       delete" setup above; this project doesn't use the Firebase CLI)
 scripts/
@@ -360,6 +364,55 @@ scripts/
     Firebase isn't configured yet, or the fetch throws, it falls back to
     the bundled `data/properties.json` and shows a small "Showing demo
     data" notice instead of crashing or showing a blank map.
+- **Metro lines**: drawn as three `google.maps.Polyline`s from
+  `data/metroLines.ts`'s hardcoded route geometry, not Google's built-in
+  `TransitLayer` — Google's own transit data for Hyderabad only renders
+  one of the real three lines (confirmed by toggling it on and looking),
+  and there's no API parameter to ask for more complete coverage; it's a
+  limitation of Google's backend data, not something the app can
+  configure around. The route geometry itself was fetched **once**, at
+  dev time, from OpenStreetMap's Overpass API (relations tagged
+  `route=subway`/`network=Hyderabad Metro`), simplified with
+  Douglas-Peucker (~30m tolerance) to keep point counts reasonable, and
+  checked into `data/metroLines.ts` as a static snapshot rather than
+  queried live — a live per-pan Overpass dependency is exactly what made
+  this app's earlier train/bus-stops feature unreliable enough to remove
+  (see below), so this deliberately avoids that failure mode entirely.
+  Colors (red/blue/green) are for clear visual distinction between lines,
+  not verified official HMR brand hex values. Toggling attaches/detaches
+  the same three polyline instances rather than recreating them, same
+  pattern the old `TransitLayer` used.
+  - **Station markers**: `data/metroLines.ts#METRO_STATIONS` (56 stations)
+    are small white-with-dark-border dots, plain `google.maps.Marker`s
+    rather than the custom OverlayView chips property/cluster markers
+    use — a station just needs a name, no rich HTML. Resolved from the
+    same Overpass route relations as the lines: each route relation's
+    `stop`-role members are node *references* only (no name/tags), so
+    station names came from a second Overpass query resolving those node
+    ids. Interchange stations (Mahatma Gandhi Bus Station, Parade
+    Grounds) had a separate node per line in OSM — merged into one
+    marker with averaged coordinates rather than showing two overlapping
+    dots.
+  - **Tap a station to see its name**: each marker's native `title`
+    attribute gives a hover tooltip on desktop, but that's a no-op on
+    touch devices — the actual "tap to see the name" affordance is a
+    `click` listener on every marker that opens one shared
+    `google.maps.InfoWindow` (reused across all 56 stations rather than
+    creating one per station, since a station's popup is just its plain
+    name, no per-station state worth keeping) positioned at whichever
+    marker was tapped.
+  - **"Near Metro" filter**: `lib/nearMetro.ts#isNearAnyMetroStation`
+    checks a property's lat/lng against all 56 stations with the same
+    haversine great-circle formula this app used before (the since-
+    removed `lib/geo.ts`, deleted along with the rent-insights feature
+    that was its only caller at the time — recreated here for this
+    genuinely new need). `FilterBar`'s "Near Metro" toggle + a 0.5–5km
+    radius number input feed into `lib/filterProperties.ts`'s
+    `nearMetroKm` filter (`null`/`undefined` when off, so "no filter"
+    and "0km, matches nothing" stay distinct), applied alongside the
+    existing type/budget filters rather than replacing them. A linear
+    scan over 56 stations per property is trivial at this app's scale;
+    not worth a spatial index.
 - **AQI control**: `lib/useAqi.ts` fetches WAQI's AQI reading for the
   current map *center* (not the visible bounds — a single point, unlike
   the removed train/bus controls which queried an area) while the toggle

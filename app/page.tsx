@@ -47,6 +47,8 @@ export default function HomePage() {
 
   const [selectedType, setSelectedType] = useState<PostType | "All">("All");
   const [budget, setBudget] = useState<BudgetRange>(BUDGET_LIMITS);
+  const [nearMetroEnabled, setNearMetroEnabled] = useState(false);
+  const [nearMetroKm, setNearMetroKm] = useState(1);
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isPickingLocation, setIsPickingLocation] = useState(false);
@@ -112,8 +114,13 @@ export default function HomePage() {
   // Recomputed only when the filter values actually change, so marker
   // updates stay real-time without re-filtering on unrelated re-renders.
   const filteredProperties = useMemo(
-    () => filterProperties(posts, { type: selectedType, price: budget }),
-    [posts, selectedType, budget]
+    () =>
+      filterProperties(posts, {
+        type: selectedType,
+        price: budget,
+        nearMetroKm: nearMetroEnabled ? nearMetroKm : null,
+      }),
+    [posts, selectedType, budget, nearMetroEnabled, nearMetroKm]
   );
 
   const openModalWithLocation = (location: LatLng | null) => {
@@ -288,6 +295,10 @@ export default function HomePage() {
               budget={budget}
               onBudgetChange={setBudget}
               budgetLimits={BUDGET_LIMITS}
+              nearMetroEnabled={nearMetroEnabled}
+              onNearMetroEnabledChange={setNearMetroEnabled}
+              nearMetroKm={nearMetroKm}
+              onNearMetroKmChange={setNearMetroKm}
             />
           )}
         </div>

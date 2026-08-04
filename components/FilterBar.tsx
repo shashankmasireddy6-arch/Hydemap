@@ -1,7 +1,7 @@
 "use client";
 
 import { PostType, POST_TYPE_CONFIG, getPostColor } from "@/types/post";
-import { ChevronDownIcon, SlidersIcon, WalletIcon } from "@/components/icons";
+import { ChevronDownIcon, SlidersIcon, TransitIcon, WalletIcon } from "@/components/icons";
 import { formatCurrency } from "@/lib/format";
 
 export interface BudgetRange {
@@ -9,12 +9,19 @@ export interface BudgetRange {
   max: number;
 }
 
+const MIN_METRO_RADIUS_KM = 0.5;
+const MAX_METRO_RADIUS_KM = 5;
+
 interface FilterBarProps {
   selectedType: PostType | "All";
   onTypeChange: (type: PostType | "All") => void;
   budget: BudgetRange;
   onBudgetChange: (budget: BudgetRange) => void;
   budgetLimits: BudgetRange;
+  nearMetroEnabled: boolean;
+  onNearMetroEnabledChange: (enabled: boolean) => void;
+  nearMetroKm: number;
+  onNearMetroKmChange: (km: number) => void;
 }
 
 export default function FilterBar({
@@ -23,6 +30,10 @@ export default function FilterBar({
   budget,
   onBudgetChange,
   budgetLimits,
+  nearMetroEnabled,
+  onNearMetroEnabledChange,
+  nearMetroKm,
+  onNearMetroKmChange,
 }: FilterBarProps) {
   const handleMinChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const value = Math.min(Number(e.target.value), budget.max);
@@ -108,6 +119,53 @@ export default function FilterBar({
             className="range-thumb pointer-events-none absolute h-5 w-full appearance-none bg-transparent"
           />
         </div>
+      </div>
+
+      <div className="hidden h-9 w-px bg-slate-100 sm:block" />
+
+      {/* Near Metro toggle + radius (km) */}
+      <div className="flex flex-col gap-1 sm:w-32">
+        <button
+          type="button"
+          role="switch"
+          aria-checked={nearMetroEnabled}
+          onClick={() => onNearMetroEnabledChange(!nearMetroEnabled)}
+          className="flex items-center justify-between gap-1.5"
+        >
+          <span className="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400">
+            <TransitIcon className="h-3 w-3" />
+            Near Metro
+          </span>
+          <span
+            className="relative inline-flex h-4 w-7 shrink-0 items-center rounded-full transition-colors"
+            style={{ backgroundColor: nearMetroEnabled ? "#4f46e5" : "#e2e8f0" }}
+          >
+            <span
+              className={`inline-block h-3 w-3 transform rounded-full bg-white shadow transition-transform ${
+                nearMetroEnabled ? "translate-x-3.5" : "translate-x-0.5"
+              }`}
+            />
+          </span>
+        </button>
+        {nearMetroEnabled && (
+          <div className="flex items-center gap-1">
+            <input
+              type="number"
+              min={MIN_METRO_RADIUS_KM}
+              max={MAX_METRO_RADIUS_KM}
+              step={0.5}
+              value={nearMetroKm}
+              onChange={(e) => {
+                const value = Number(e.target.value);
+                if (Number.isNaN(value)) return;
+                const clamped = Math.min(MAX_METRO_RADIUS_KM, Math.max(MIN_METRO_RADIUS_KM, value));
+                onNearMetroKmChange(clamped);
+              }}
+              className="w-14 rounded-lg border border-slate-200 px-1.5 py-1 text-xs text-slate-800 focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100"
+            />
+            <span className="text-[10px] text-slate-500">km radius</span>
+          </div>
+        )}
       </div>
     </div>
   );
