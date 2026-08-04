@@ -92,8 +92,21 @@ export default function MapControls({ map }: MapControlsProps) {
           // `.gm-style-iw-d { padding: 0 !important; }`, tuned for the
           // property popup's padded wrapper, which zeroes out Google's
           // default InfoWindow padding globally.
+          //
+          // pr-[52px] (not px-3's usual pr-3) is also load-bearing, not
+          // decorative: the close button sits at a *fixed* horizontal
+          // offset from the popup's right edge (globals.css's
+          // `.gm-ui-hover-effect`), and this content auto-sizes its width
+          // to fit whichever line (label or name) is longer. Without a
+          // reserved right-side gutter at least as wide as the button's
+          // icon-to-edge distance (measured ~40px: 48px button, 24px
+          // icon centered inside it, 4px right offset), a station whose
+          // name runs close to that edge — e.g. "Road No 5 Jubilee
+          // Hills" — puts real text directly under the button; no
+          // vertical offset on the button fixes that on its own, since
+          // the collision is horizontal, not vertical.
           infoWindow.setContent(`
-            <div class="flex items-center gap-2 px-3 py-2.5 font-sans">
+            <div class="flex items-center gap-2 py-2.5 pl-3 pr-[52px] font-sans">
               <span class="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-indigo-50">
                 <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="#4f46e5" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                   <line x1="4" y1="8" x2="20" y2="8" />
@@ -104,7 +117,7 @@ export default function MapControls({ map }: MapControlsProps) {
                 </svg>
               </span>
               <div class="flex flex-col">
-                <span class="text-[9px] font-semibold uppercase tracking-wide text-slate-400">Metro Station</span>
+                <span class="whitespace-nowrap text-[9px] font-semibold uppercase tracking-wide text-slate-400">Metro Station</span>
                 <span class="whitespace-nowrap text-sm font-bold text-slate-900">${station.name}</span>
               </div>
             </div>

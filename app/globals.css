@@ -63,7 +63,24 @@ body {
   display: none;
 }
 
+/* Google renders this as position: relative, so top/right alone only
+   offset it visually — the button's own 48x48 box still reserves that
+   much height in normal flow above the popup content, showing as a dead
+   gap before the first line. `position: absolute` takes it out of flow
+   entirely so content starts flush at the top of the card. */
 .gm-ui-hover-effect {
+  position: absolute !important;
   top: 4px !important;
   right: 4px !important;
+}
+
+/* Google reserves this as a header row for the InfoWindow's own `title`
+   option (separate from `content`) — this app never sets `title` on any
+   InfoWindow (see MapView.tsx and MapControls.tsx, both content-only), so
+   it's always an empty ~17px placeholder sitting above the real content.
+   Taking the close button out of flow (above) wasn't enough on its own:
+   this row is a flex sibling of the button, not a wrapper around it, so
+   it kept reserving its own height regardless. */
+.gm-style-iw-ch {
+  display: none !important;
 }
